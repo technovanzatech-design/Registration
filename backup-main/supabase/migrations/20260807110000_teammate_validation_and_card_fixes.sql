@@ -16,6 +16,14 @@ returns jsonb language sql security definer set search_path = public as $$
   limit 1;
 $$;
 
+create or replace function public.registration_contact_owner(p_email text, p_phone text)
+returns jsonb language sql security definer set search_path = public as $$
+  select jsonb_build_object('registerNumber', r.register_no, 'status', r.status)
+  from public.registrations r
+  where lower(r.email) = lower(trim(p_email)) or r.phone = trim(p_phone)
+  limit 1;
+$$;
+
 create or replace function public.registration_card_details(p_participant_id text)
 returns jsonb language sql security definer set search_path = public as $$
   select jsonb_build_object('events', r.events, 'status', r.status, 'eventPartners', r.event_partners)
@@ -58,5 +66,6 @@ for each row execute function public.validate_registration_contact_and_events();
 
 grant execute on function public.reserved_teammate_by_register_no(text) to anon, authenticated;
 grant execute on function public.reserved_teammate_by_contact(text, text) to anon, authenticated;
+grant execute on function public.registration_contact_owner(text, text) to anon, authenticated;
 grant execute on function public.registration_card_details(text) to anon, authenticated;
 grant execute on function public.teammate_event_count(text, text, text) to anon, authenticated;

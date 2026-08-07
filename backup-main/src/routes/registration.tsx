@@ -33,6 +33,7 @@ import {
   completePartnerRegistration,
   findReservedTeammateByContact,
   getRegistrationCardDetails,
+  getRegistrationContactOwner,
   getReservedTeammate,
   getRegistrationStatus,
   teammateEventCount,
@@ -308,7 +309,19 @@ function RegistrationPage() {
     // STEP 2 — Email/phone duplicate check
     if (step === 2) {
       setChecking(true);
-      const reservedByContact = await findReservedTeammateByContact(values.email, values.phone);
+      let reservedByContact;
+      let contactOwner;
+      try {
+        [reservedByContact, contactOwner] = await Promise.all([
+          findReservedTeammateByContact(values.email, values.phone),
+          getRegistrationContactOwner(values.email, values.phone),
+        ]);
+      } catch (error) {
+        console.error("Contact verification error:", error);
+        setChecking(false);
+        setSubmitError("Could not verify email and phone details. Please try again.");
+        return;
+      }
       setChecking(false);
 
       if (reservedByContact && reservedByContact.registerNumber !== values.registerNumber.trim()) {
@@ -317,6 +330,18 @@ function RegistrationPage() {
           message: `These contact details belong to a reserved teammate. Enter the correct register number: ${reservedByContact.registerNumber}`,
         });
         setStep(1);
+        return;
+      }
+
+      if (contactOwner && contactOwner.registerNumber !== values.registerNumber.trim()) {
+        form.setError("email", {
+          type: "manual",
+          message: "This Gmail address or phone number is already registered.",
+        });
+        form.setError("phone", {
+          type: "manual",
+          message: "This Gmail address or phone number is already registered.",
+        });
         return;
       }
 

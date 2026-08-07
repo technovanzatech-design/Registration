@@ -35,6 +35,15 @@ export async function findReservedTeammateByContact(email: string, phone: string
   return data as ReservedTeammate | null;
 }
 
+export async function getRegistrationContactOwner(email: string, phone: string) {
+  const { data, error } = await supabase.rpc("registration_contact_owner", {
+    p_email: email,
+    p_phone: phone,
+  });
+  if (error) throw error;
+  return data as { registerNumber: string; status: string } | null;
+}
+
 export async function getRegistrationCardDetails(participantId: string) {
   const { data, error } = await supabase.rpc("registration_card_details", {
     p_participant_id: participantId,
