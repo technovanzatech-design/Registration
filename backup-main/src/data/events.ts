@@ -21,11 +21,12 @@ export const events: SymposiumEvent[] = [
     name: "TechTalks",
     icon: "Mic2",
     category: "technical",
-    maxParticipants: "15 teams / 30 participants",
+    maxParticipants: "20 teams / 40 participants",
     description: "Present a sharp, engaging talk on a technology topic.",
     rules: [
       "Two members per team",
       "Both members must be registered",
+      "The final 5 teams register for TechTalks only",
       "Presentation time is announced on site",
     ],
     duration: "2 hours",

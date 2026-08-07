@@ -1,10 +1,13 @@
-import { Linkedin, Mail, Phone, Cpu } from "lucide-react";
+import { ArrowLeft, Linkedin, Mail, Phone, Cpu } from "lucide-react";
 import { site } from "@/data/site";
+
+// Replace # with the URL of the main TECHNOVANZA information website after it is hosted.
+const HOME_WEBSITE_URL = "#";
 
 export function Footer() {
   return (
     <footer className="relative mt-24 border-t border-border/60">
-      <div className="mx-auto grid max-w-6xl gap-10 px-6 py-14 md:grid-cols-2">
+      <div className="mx-auto grid max-w-6xl gap-10 px-6 py-14 md:grid-cols-3">
         <div>
           <div className="flex min-w-0 items-center gap-3">
             <span className="glass glow-cyan flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl">
@@ -24,6 +27,21 @@ export function Footer() {
             {site.department}
           </p>
          
+        </div>
+
+        <div>
+          <h3 className="font-display text-sm font-semibold tracking-widest text-foreground uppercase">
+            Registration
+          </h3>
+          <a
+            href={HOME_WEBSITE_URL}
+            className="bg-aurora glow-cyan mt-5 inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-primary-foreground transition-transform hover:scale-105"
+          >
+            <ArrowLeft className="h-4 w-4" /> Back to Main Website
+          </a>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Event details, rules and updates
+          </p>
         </div>
 
         <div>

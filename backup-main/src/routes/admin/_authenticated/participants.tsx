@@ -42,7 +42,14 @@ type Registration = {
   phone: string;
   events: string[];
   partner_full_name?: string | null;
-  event_partners?: Record<string, { fullName?: string }> | null;
+  partner_register_no?: string | null;
+  partner_email?: string | null;
+  partner_phone?: string | null;
+  event_partners?: Record<
+    string,
+    { fullName?: string; registerNumber?: string; email?: string; phone?: string }
+  > | null;
+  status: "pending_partner" | "complete";
   attendance: boolean;
   created_at: string;
 };
@@ -149,7 +156,7 @@ function ParticipantsPage() {
       let query = supabase
         .from("registrations")
         .select(
-          "id, participant_id, full_name, register_no, college_name, email, phone, events, attendance, created_at",
+          "id, participant_id, full_name, register_no, college_name, email, phone, events, partner_full_name, partner_register_no, partner_email, partner_phone, event_partners, status, attendance, created_at",
           { count: "exact" },
         );
 
@@ -197,6 +204,10 @@ function ParticipantsPage() {
     ? Math.max(1, Math.ceil(registrationsQuery.data.count / PAGE_SIZE))
     : 1;
   const [exporting, setExporting] = useState(false);
+  const eventNameBySlug = useMemo(
+    () => new Map((eventsQuery.data ?? []).map((event) => [event.slug, event.name])),
+    [eventsQuery.data],
+  );
 
   const exportExcel = async () => {
     setExporting(true);
@@ -204,7 +215,7 @@ function ParticipantsPage() {
       let query = supabase
         .from("registrations")
         .select(
-          "full_name, register_no, college_name, email, phone, events, partner_full_name, event_partners, attendance, created_at",
+          "participant_id, full_name, register_no, college_name, email, phone, events, partner_full_name, event_partners, status, attendance, created_at",
         );
 
       if (search.trim()) {
@@ -231,7 +242,7 @@ function ParticipantsPage() {
       const { data, error } = await query;
       if (error) throw error;
 
-      const rows = (data ?? []) as Omit<Registration, "id" | "participant_id">[];
+      const rows = (data ?? []) as Registration[];
 
       const categoryBySlug = new Map((eventsQuery.data ?? []).map((e) => [e.slug, e.category]));
 
@@ -242,6 +253,7 @@ function ParticipantsPage() {
         );
 
         return {
+          "Participant ID": r.participant_id,
           "Full Name": r.full_name,
           "Register No.": r.register_no,
           College: r.college_name,
@@ -255,6 +267,7 @@ function ParticipantsPage() {
               .join("; ") ||
             r.partner_full_name ||
             "-",
+          Status: r.status === "complete" ? "Complete" : "Pending teammate",
           Attendance: r.attendance ? "Present" : "Not marked",
           "Registered At": new Date(r.created_at).toLocaleString(),
         };
@@ -264,8 +277,8 @@ function ParticipantsPage() {
 
       // Force Register No. and Phone columns to plain text (type "s"),
       // so Excel/Sheets never reinterprets them as numbers.
-      const registerNoCol = "B"; // 2nd column
-      const phoneCol = "E"; // 5th column
+      const registerNoCol = "C"; // 3rd column
+      const phoneCol = "F"; // 6th column
       const range = XLSX.utils.decode_range(worksheet["!ref"] ?? "A1");
       for (let row = range.s.r + 1; row <= range.e.r; row++) {
         for (const col of [registerNoCol, phoneCol]) {
@@ -280,6 +293,7 @@ function ParticipantsPage() {
 
       // Reasonable column widths so it doesn't look squished on open.
       worksheet["!cols"] = [
+        { wch: 15 }, // Participant ID
         { wch: 20 }, // Full Name
         { wch: 16 }, // Register No.
         { wch: 24 }, // College
@@ -449,6 +463,7 @@ function ParticipantsPage() {
                         onClick={() => toggleSort("college_name")}
                       />
                       <TableHead>Events</TableHead>
+                      <TableHead>Status</TableHead>
                       <SortableHead
                         label="Registered"
                         active={sortField === "created_at"}
@@ -475,6 +490,11 @@ function ParticipantsPage() {
                               </Badge>
                             ))}
                           </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={r.status === "complete" ? "default" : "outline"}>
+                            {r.status === "complete" ? "Complete" : "Pending teammate"}
+                          </Badge>
                         </TableCell>
                         <TableCell className="text-muted-foreground">
                           {new Date(r.created_at).toLocaleDateString()}
@@ -521,7 +541,13 @@ function ParticipantsPage() {
             <DialogTitle>{selected?.full_name}</DialogTitle>
           </DialogHeader>
           {selected && (
+            <div className="max-h-[70vh] overflow-y-auto pr-1">
             <div className="flex flex-col gap-2 text-sm">
+              <DetailRow label="Participant ID" value={selected.participant_id} />
+              <DetailRow
+                label="Registration status"
+                value={selected.status === "complete" ? "Complete" : "Pending teammate completion"}
+              />
               <DetailRow label="Register No." value={selected.register_no} />
               <DetailRow label="College" value={selected.college_name} />
               <DetailRow label="Email" value={selected.email} />
@@ -539,11 +565,37 @@ function ParticipantsPage() {
                 <div className="flex flex-wrap gap-1">
                   {selected.events.map((slug) => (
                     <Badge key={slug} variant="secondary">
-                      {slug}
+                      {eventNameBySlug.get(slug) ?? slug}
                     </Badge>
                   ))}
                 </div>
               </div>
+              <div className="flex flex-col gap-2 border-t border-border pt-3">
+                <span className="font-medium text-foreground">Team details</span>
+                {Object.entries(selected.event_partners ?? {}).length > 0 ? (
+                  Object.entries(selected.event_partners ?? {}).map(([slug, teammate]) => (
+                    <div key={slug} className="rounded-lg border border-border bg-secondary/30 p-3">
+                      <p className="font-medium text-foreground">
+                        {eventNameBySlug.get(slug) ?? slug}
+                      </p>
+                      <p className="mt-1 text-muted-foreground">{teammate.fullName ?? "-"}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {teammate.registerNumber ?? "-"} · {teammate.email ?? "-"} · {teammate.phone ?? "-"}
+                      </p>
+                    </div>
+                  ))
+                ) : selected.partner_full_name ? (
+                  <div className="rounded-lg border border-border bg-secondary/30 p-3">
+                    <p className="text-foreground">{selected.partner_full_name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {selected.partner_register_no ?? "-"} · {selected.partner_email ?? "-"} · {selected.partner_phone ?? "-"}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground">Individual-event registration.</p>
+                )}
+              </div>
+            </div>
             </div>
           )}
         </DialogContent>

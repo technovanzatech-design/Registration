@@ -202,10 +202,6 @@ function renderCard(registration: Registration): HTMLCanvasElement {
   rowY += rowGap;
   field(rowY, "Register Number", registration.registerNumber, "#dc2626");
   rowY += rowGap;
-  if (registration.partnerFullName) {
-    field(rowY, "Teammate", registration.partnerFullName, "#ef4444");
-    rowY += rowGap;
-  }
   field(rowY, "Unique ID", registration.id, "#f472b6");
 
   // Registered events — one full-width row per event, large and easy to scan
@@ -219,7 +215,9 @@ function renderCard(registration: Registration): HTMLCanvasElement {
   const rowSpacing = 16;
   registration.events.forEach((id) => {
     const evt = getEventById(id);
-    const label = evt ? evt.name : id;
+    const eventName = evt ? evt.name : id;
+    const teammateName = registration.eventPartners?.[id]?.fullName;
+    const label = teammateName ? `${eventName}  ·  Team: ${teammateName}` : eventName;
     const accent = evt?.category === "non-technical" ? "#f472b6" : "#67e8f9";
 
     ctx.fillStyle = `${accent}1a`;

@@ -6,6 +6,7 @@ export async function sendRegistrationEmail(
   participantId: string,
   imageUrl: string,
   pending = false,
+  teammateComplete = false,
 ) {
   const { data, error } = await supabase.functions.invoke("send-registration-email", {
     body: {
@@ -14,6 +15,7 @@ export async function sendRegistrationEmail(
       participantId,
       imageUrl,
       pending,
+      teammateComplete,
     },
   });
 

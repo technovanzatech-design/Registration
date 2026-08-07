@@ -25,5 +25,12 @@ export interface Registration {
   events: string[];
   createdAt: string;
   partnerFullName?: string | null;
+  eventPartners?: Record<string, { fullName?: string }>;
   pendingTeammates?: Registration[];
+}
+
+export interface ReservedTeammate {
+  registerNumber: string;
+  email: string;
+  phone: string;
 }

@@ -27,9 +27,13 @@ Deno.serve(async (req) => {
       participantId,
       imageUrl,
       pending = false,
+      teammateComplete = false,
     } = await req.json();
     const pendingNotice = pending
       ? `<p><strong>Your teammate reserved your team-event seat.</strong> Return to registration with your register number, Gmail and phone number to choose your remaining event.</p><p>Your provisional one-event card is attached.</p>`
+      : "";
+    const teammateCompleteNotice = teammateComplete
+      ? `<p><strong>Your teammate completed your registration for both your Technical and Non-Technical events.</strong> You do not need to register again.</p>`
       : "";
 
     // Download PNG from Supabase Storage
@@ -65,6 +69,8 @@ Deno.serve(async (req) => {
 
         subject: pending
           ? "TECHNOVANZA 2026 - Complete Your Registration"
+          : teammateComplete
+            ? "TECHNOVANZA 2026 - Registration Completed by Your Teammate"
           : "TECHNOVANZA 2026 - Registration Confirmed",
 
         htmlContent: `
@@ -76,6 +82,7 @@ Deno.serve(async (req) => {
             <p>Hi <strong>${studentName}</strong>,</p>
 
             ${pendingNotice}
+            ${teammateCompleteNotice}
 
             <p>
                 Thank you for registering for

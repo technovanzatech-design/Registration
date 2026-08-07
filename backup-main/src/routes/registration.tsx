@@ -31,9 +31,14 @@ import { StepProgress } from "@/components/registration/StepProgress";
 import {
   createRegistration,
   completePartnerRegistration,
+  findReservedTeammateByContact,
+  getRegistrationCardDetails,
+  getReservedTeammate,
   getRegistrationStatus,
+  teammateEventCount,
 } from "@/lib/registrations";
 import type { Registration } from "@/types";
+import type { ReservedTeammate } from "@/types";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/registration")({
@@ -58,7 +63,14 @@ export const Route = createFileRoute("/registration")({
 
 const schema = z.object({
   fullName: z.string().trim().min(3, "Enter your full name").max(80),
-  registerNumber: z.string().trim().min(6, "Enter a valid university register number").max(20),
+  registerNumber: z
+    .string()
+    .trim()
+    .min(6, "Enter a valid university register number")
+    .max(20)
+    .refine((value) => !value.startsWith("8204"), {
+      message: "Your register number belongs to our college. Registration is only for other colleges.",
+    }),
   collegeName: z.string().trim().min(3, "Enter your college name").max(120),
   email: z
     .string()
@@ -87,6 +99,51 @@ const STEP_FIELDS: Record<number, (keyof FormValues)[]> = {
 
 const REQUIRED_EVENTS = 2;
 const TOTAL_CAP = 120;
+const TECHTALKS_REGULAR_SEATS = 30;
+
+type TeammateField = "fullName" | "registerNumber" | "email" | "phone";
+
+function teammateValidationError(
+  teammate: { fullName: string; registerNumber: string; email: string; phone: string },
+  eventName: string,
+) {
+  if (Object.values(teammate).some((value) => !value.trim())) return `Enter all ${eventName} teammate details.`;
+  if (!teammate.email.trim().toLowerCase().endsWith("@gmail.com")) {
+    return `Enter a valid Gmail address for the ${eventName} teammate.`;
+  }
+  if (!/^[6-9]\d{9}$/.test(teammate.phone.trim())) {
+    return `Enter a valid 10-digit phone number for the ${eventName} teammate.`;
+  }
+  return null;
+}
+
+function teammateFieldError(
+  field: TeammateField,
+  value: string,
+  participant: FormValues,
+) {
+  const cleaned = value.trim();
+  if (!cleaned) return "This field is required.";
+  if (field === "email" && !cleaned.toLowerCase().endsWith("@gmail.com")) {
+    return "Enter a valid Gmail address ending in @gmail.com.";
+  }
+  if (field === "email" && cleaned.toLowerCase() === participant.email.trim().toLowerCase()) {
+    return "Teammate Gmail address must be different from Member A's Gmail address.";
+  }
+  if (field === "phone" && !/^[6-9]\d{9}$/.test(cleaned)) {
+    return "Enter a valid 10-digit phone number.";
+  }
+  if (field === "phone" && cleaned === participant.phone.trim()) {
+    return "Teammate phone number must be different from Member A's phone number.";
+  }
+  if (field === "registerNumber" && cleaned === participant.registerNumber.trim()) {
+    return "Teammate register number must be different from Member A's register number.";
+  }
+  if (field === "registerNumber" && cleaned.startsWith("8204")) {
+    return "This register number belongs to our college. Registration is only for other colleges.";
+  }
+  return null;
+}
 
 function RegistrationPage() {
   const [rulesAgreed, setRulesAgreed] = useState(false);
@@ -100,6 +157,8 @@ function RegistrationPage() {
   const [result, setResult] = useState<Registration | null>(null);
   const [completingPartner, setCompletingPartner] = useState(false);
   const [lockedCategory, setLockedCategory] = useState<"technical" | "non-technical" | null>(null);
+  const [reservedTeammate, setReservedTeammate] = useState<ReservedTeammate | null>(null);
+  const [teammateFieldErrors, setTeammateFieldErrors] = useState<Record<string, string>>({});
   const [partner, setPartner] = useState({
     fullName: "",
     registerNumber: "",
@@ -158,7 +217,6 @@ function RegistrationPage() {
   }, []);
 
   const seatsFor = (slug: string) => capacities?.find((c) => c.event_slug === slug);
-  const registrationsFull = totalRegistered != null && totalRegistered >= TOTAL_CAP;
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -174,16 +232,42 @@ function RegistrationPage() {
 
   const values = form.watch();
 
+  useEffect(() => {
+    if (
+      reservedTeammate &&
+      values.registerNumber.trim() !== reservedTeammate.registerNumber
+    ) {
+      setReservedTeammate(null);
+      setCompletingPartner(false);
+      setLockedCategory(null);
+    }
+  }, [reservedTeammate, values.registerNumber]);
+
   const selectedTechnical = selected.find(
     (id) => events.find((e) => e.id === id)?.category === "technical",
   );
   const selectedNonTechnical = selected.find(
     (id) => events.find((e) => e.id === id)?.category === "non-technical",
   );
+  const selectedDuo = selected.some((id) => ["techtalks", "fun-feast", "nexus"].includes(id));
+  const primaryTeammate = completingPartner
+    ? partner
+    : selected.includes("techtalks")
+      ? techTalkPartner
+      : funFeastPartner;
+  const primaryTeammateKey = completingPartner
+    ? "partner"
+    : selected.includes("techtalks")
+      ? "techTalkPartner"
+      : "funFeastPartner";
+  const isTechTalksBonus =
+    !completingPartner &&
+    selected.length === 1 &&
+    selected[0] === "techtalks" &&
+    (seatsFor("techtalks")?.registered_count ?? 0) >= TECHTALKS_REGULAR_SEATS;
   const eventsComplete = completingPartner
     ? selected.length === 1
-    : Boolean(selectedTechnical && selectedNonTechnical);
-  const selectedDuo = selected.some((id) => ["techtalks", "fun-feast", "nexus"].includes(id));
+    : isTechTalksBonus || Boolean(selectedTechnical && selectedNonTechnical);
 
   const next = async () => {
     const fields = STEP_FIELDS[step];
@@ -209,6 +293,12 @@ function RegistrationPage() {
       if (status.startsWith("pending_partner_")) {
         setCompletingPartner(true);
         setLockedCategory(status.replace("pending_partner_", "") as "technical" | "non-technical");
+        const teammate = await getReservedTeammate(values.registerNumber);
+        if (teammate) {
+          setReservedTeammate(teammate);
+          form.setValue("email", teammate.email, { shouldValidate: true });
+          form.setValue("phone", teammate.phone, { shouldValidate: true });
+        }
       }
 
       setStep(2);
@@ -218,7 +308,17 @@ function RegistrationPage() {
     // STEP 2 — Email/phone duplicate check
     if (step === 2) {
       setChecking(true);
+      const reservedByContact = await findReservedTeammateByContact(values.email, values.phone);
       setChecking(false);
+
+      if (reservedByContact && reservedByContact.registerNumber !== values.registerNumber.trim()) {
+        form.setError("registerNumber", {
+          type: "manual",
+          message: `These contact details belong to a reserved teammate. Enter the correct register number: ${reservedByContact.registerNumber}`,
+        });
+        setStep(1);
+        return;
+      }
 
       setStep(3);
       return;
@@ -227,14 +327,52 @@ function RegistrationPage() {
     // STEP 3 — Event validation: exactly one technical + one non-technical
     if (step === 3) {
       if (!eventsComplete) return;
-      const missingDuoPartner = completingPartner
-        ? selectedDuo && Object.values(partner).some((value) => !value.trim())
-        : (selected.includes("techtalks") &&
-            Object.values(techTalkPartner).some((value) => !value.trim())) ||
-          ((selected.includes("fun-feast") || selected.includes("nexus")) &&
-            Object.values(funFeastPartner).some((value) => !value.trim()));
-      if (missingDuoPartner) {
-        setSubmitError("Enter all teammate details for the two-person event.");
+      const teammateRegisterNumbers = completingPartner
+        ? [partner.registerNumber]
+        : [
+            ...(selected.includes("techtalks") ? [techTalkPartner.registerNumber] : []),
+            ...((selected.includes("fun-feast") || selected.includes("nexus"))
+              ? [funFeastPartner.registerNumber]
+              : []),
+          ];
+      if (teammateRegisterNumbers.some((number) => number.trim().startsWith("8204"))) {
+        setSubmitError("Your teammate's register number belongs to our college. Registration is only for other colleges.");
+        return;
+      }
+      const teammateError = completingPartner && selectedDuo
+        ? teammateValidationError(partner, "team-event")
+        : (selected.includes("techtalks")
+            ? teammateValidationError(techTalkPartner, "TechTalks")
+            : null) ||
+          ((selected.includes("fun-feast") || selected.includes("nexus"))
+            ? teammateValidationError(funFeastPartner, selected.includes("nexus") ? "Nexus" : "Fun Feast")
+            : null);
+      if (teammateError) {
+        setSubmitError(teammateError);
+        return;
+      }
+      const teammatesToCheck = completingPartner
+        ? selectedDuo
+          ? [partner]
+          : []
+        : [
+            ...(selected.includes("techtalks") ? [techTalkPartner] : []),
+            ...((selected.includes("fun-feast") || selected.includes("nexus"))
+              ? [funFeastPartner]
+              : []),
+          ];
+      let eventCounts: number[];
+      try {
+        eventCounts = await Promise.all(teammatesToCheck.map(teammateEventCount));
+      } catch (error) {
+        console.error("Teammate verification error:", error);
+        setSubmitError(
+          "Could not verify teammate details. Run the latest Supabase SQL fix, then try again.",
+        );
+        return;
+      }
+      if (eventCounts.some((count) => count >= 2)) {
+        setSubmitError("Your teammate has already selected two events and cannot be added to another team event.");
         return;
       }
       setSubmitError(null);
@@ -259,6 +397,17 @@ function RegistrationPage() {
       }
       if (isFull) return current;
 
+      if (id === "techtalks" && (seats?.registered_count ?? 0) >= TECHTALKS_REGULAR_SEATS) {
+        return [id];
+      }
+      if (
+        event.category === "non-technical" &&
+        current.includes("techtalks") &&
+        (seatsFor("techtalks")?.registered_count ?? 0) >= TECHTALKS_REGULAR_SEATS
+      ) {
+        return current;
+      }
+
       // Selecting a new event in a category replaces whichever event
       // was previously selected in that same category — a participant
       // can only hold one technical + one non-technical slot.
@@ -274,10 +423,12 @@ function RegistrationPage() {
     setStep(1);
     setSelected([]);
     setSubmitError(null);
+    setTeammateFieldErrors({});
     setRulesAgreed(false);
     setRulesChecked(false);
     setCompletingPartner(false);
     setLockedCategory(null);
+    setReservedTeammate(null);
     setPartner({ fullName: "", registerNumber: "", email: "", phone: "" });
     setTechTalkPartner({ fullName: "", registerNumber: "", email: "", phone: "" });
     setFunFeastPartner({ fullName: "", registerNumber: "", email: "", phone: "" });
@@ -354,14 +505,26 @@ function RegistrationPage() {
       const imageUrl = await uploadEntryCard(record.id, blob);
       await sendRegistrationEmail(record.fullName, record.email, record.id, imageUrl);
       for (const teammate of record.pendingTeammates ?? []) {
-        const teammateBlob = await getEntryCardBlob(teammate);
-        const teammateImageUrl = await uploadEntryCard(teammate.id, teammateBlob);
+        const currentDetails = await getRegistrationCardDetails(teammate.id);
+        const fallbackEventPartners = Object.fromEntries(
+          teammate.events.map((event) => [event, { fullName: teammate.partnerFullName ?? "" }]),
+        );
+        const teammateRecord = currentDetails
+          ? {
+              ...teammate,
+              events: currentDetails.events,
+              eventPartners: currentDetails.eventPartners ?? fallbackEventPartners,
+            }
+          : { ...teammate, eventPartners: fallbackEventPartners };
+        const teammateBlob = await getEntryCardBlob(teammateRecord);
+        const teammateImageUrl = await uploadEntryCard(teammateRecord.id, teammateBlob);
         await sendRegistrationEmail(
-          teammate.fullName,
-          teammate.email,
-          teammate.id,
+          teammateRecord.fullName,
+          teammateRecord.email,
+          teammateRecord.id,
           teammateImageUrl,
-          true,
+          currentDetails?.status === "pending_partner",
+          currentDetails?.status === "complete" && currentDetails.events.length === 2,
         );
       }
       console.log("Uploaded Entry Card:", imageUrl);
@@ -378,7 +541,7 @@ function RegistrationPage() {
     );
   }
 
-  if (registrationsFull) {
+  if (false) {
     return (
       <div className="mx-auto flex max-w-lg flex-col items-center px-6 pt-40 pb-10 text-center">
         <span className="glass flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/40">
@@ -478,7 +641,7 @@ function RegistrationPage() {
         </p>
         {totalRegistered != null && (
           <p className="mt-2 text-xs text-muted-foreground">
-            {totalRegistered} / {TOTAL_CAP} total slots filled
+            {totalRegistered} registrations completed
           </p>
         )}
       </div>
@@ -531,6 +694,7 @@ function RegistrationPage() {
                   <input
                     {...form.register("email")}
                     placeholder="you@gmail.com"
+                    readOnly={reservedTeammate !== null}
                     className={inputClass}
                   />
                 </Field>
@@ -539,6 +703,7 @@ function RegistrationPage() {
                     {...form.register("phone")}
                     placeholder="10-digit mobile number"
                     inputMode="numeric"
+                    readOnly={reservedTeammate !== null}
                     className={inputClass}
                   />
                 </Field>
@@ -551,7 +716,9 @@ function RegistrationPage() {
                 caption={
                   completingPartner
                     ? "Choose one event from your remaining category."
-                    : "Select exactly one technical event and one non-technical event."
+                    : isTechTalksBonus
+                      ? "TechTalks regular teams are full. You can register for TechTalks only."
+                      : "Select exactly one technical event and one non-technical event."
                 }
               >
                 {capacityError && (
@@ -561,7 +728,7 @@ function RegistrationPage() {
                   </p>
                 )}
 
-                <EventGroup
+                {!isTechTalksBonus && <EventGroup
                   label="Technical"
                   categoryEvents={events.filter(
                     (e) =>
@@ -571,7 +738,7 @@ function RegistrationPage() {
                   selectedId={selectedTechnical}
                   seatsFor={seatsFor}
                   onToggle={toggleEvent}
-                />
+                />}
                 <EventGroup
                   label="Non-Technical"
                   categoryEvents={events.filter(
@@ -591,7 +758,9 @@ function RegistrationPage() {
                   )}
                 >
                   {eventsComplete
-                    ? "Both events selected."
+                    ? isTechTalksBonus
+                      ? "TechTalks-only bonus team selected."
+                      : "Both events selected."
                     : `Select ${REQUIRED_EVENTS} events — one technical, one non-technical.`}
                 </p>
 
@@ -648,13 +817,7 @@ function RegistrationPage() {
                         >
                           {label}
                           <input
-                            value={
-                              (completingPartner
-                                ? partner
-                                : selected.includes("techtalks")
-                                  ? techTalkPartner
-                                  : funFeastPartner)[key]
-                            }
+                            value={primaryTeammate[key]}
                             onChange={(event) =>
                               (completingPartner
                                 ? setPartner
@@ -665,8 +828,23 @@ function RegistrationPage() {
                                 [key]: event.target.value,
                               }))
                             }
-                            className={`${inputClass} mt-2`}
+                            onBlur={() => {
+                              const error = teammateFieldError(key, primaryTeammate[key], values);
+                              setTeammateFieldErrors((current) => ({
+                                ...current,
+                                [`${primaryTeammateKey}.${key}`]: error ?? "",
+                              }));
+                            }}
+                            className={cn(
+                              `${inputClass} mt-2`,
+                              teammateFieldErrors[`${primaryTeammateKey}.${key}`] && "border-destructive",
+                            )}
                           />
+                          {teammateFieldErrors[`${primaryTeammateKey}.${key}`] && (
+                            <span className="mt-1 block normal-case text-xs tracking-normal text-destructive">
+                              {teammateFieldErrors[`${primaryTeammateKey}.${key}`]}
+                            </span>
+                          )}
                         </label>
                       ))}
                     </div>
@@ -706,13 +884,33 @@ function RegistrationPage() {
                                   [key]: event.target.value,
                                 }))
                               }
-                              className={`${inputClass} mt-2`}
+                              onBlur={() => {
+                                const error = teammateFieldError(key, funFeastPartner[key], values);
+                                setTeammateFieldErrors((current) => ({
+                                  ...current,
+                                  [`funFeastPartner.${key}`]: error ?? "",
+                                }));
+                              }}
+                              className={cn(
+                                `${inputClass} mt-2`,
+                                teammateFieldErrors[`funFeastPartner.${key}`] && "border-destructive",
+                              )}
                             />
+                            {teammateFieldErrors[`funFeastPartner.${key}`] && (
+                              <span className="mt-1 block normal-case text-xs tracking-normal text-destructive">
+                                {teammateFieldErrors[`funFeastPartner.${key}`]}
+                              </span>
+                            )}
                           </label>
                         ))}
                       </div>
                     </div>
                   )}
+                {submitError && (
+                  <p className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+                    {submitError}
+                  </p>
+                )}
               </StepShell>
             )}
 
@@ -724,20 +922,15 @@ function RegistrationPage() {
                   <Summary label="College" value={values.collegeName} />
                   <Summary label="Gmail" value={values.email} />
                   <Summary label="Phone Number" value={values.phone} />
-                  {selectedDuo && (
-                    <Summary
-                      label="Teammate"
-                      value={
-                        completingPartner
-                          ? partner.fullName
-                          : selected.includes("techtalks")
-                            ? techTalkPartner.fullName
-                            : funFeastPartner.fullName
-                      }
-                    />
-                  )}
                   {selected.map((id) => {
                     const event = events.find((e) => e.id === id);
+                    const teammateName = completingPartner && selectedDuo
+                      ? partner.fullName
+                      : id === "techtalks"
+                        ? techTalkPartner.fullName
+                        : id === "fun-feast" || id === "nexus"
+                          ? funFeastPartner.fullName
+                          : null;
                     return (
                       <Summary
                         key={id}
@@ -746,7 +939,11 @@ function RegistrationPage() {
                             ? "Technical Event"
                             : "Non-Technical Event"
                         }
-                        value={event?.name ?? id}
+                        value={
+                          teammateName
+                            ? `${event?.name ?? id} · Team: ${teammateName}`
+                            : (event?.name ?? id)
+                        }
                       />
                     );
                   })}
