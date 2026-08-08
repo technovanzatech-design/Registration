@@ -36,6 +36,7 @@ export const site = {
 export const navLinks = [{ label: "Registration", to: "/registration" }] as const;
 
 export const rules = [
+  "If the participant choose duo event first Member must registered with their teammate, then only your teammate complete their reservation ",
   "Each participant must register for exactly one Technical event and one Non-Technical event.",
   "Registration is only for other colleges. Register numbers starting with 8204 are not eligible.",
   "Register only once using your University Register Number, Gmail address, and phone number. Duplicate details are not permitted.",
