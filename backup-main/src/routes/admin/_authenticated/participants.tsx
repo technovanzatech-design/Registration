@@ -1,11 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight, X, Mail, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 
 import { supabase } from "@/lib/supabase";
+import { sendRegistrationEmail } from "@/lib/email";
+import { getEntryCardBlob } from "@/lib/entryCard";
+import { uploadEntryCard } from "@/lib/storage";
+import type { Registration as EntryCardRegistration } from "@/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -54,10 +58,26 @@ type Registration = {
   created_at: string;
 };
 
+type EmailDelivery = {
+  id: string;
+  participant_id: string;
+  recipient_name: string;
+  recipient_email: string;
+  card_bucket: "entry-passes" | "teammate-entry-passes";
+  card_path: string;
+  delivery_type: "registration" | "pending_teammate" | "teammate_complete" | "manual_resend";
+  status: "sending" | "sent" | "failed";
+  error_message: string | null;
+  created_at: string;
+};
+
+type DeliveryStatus = EmailDelivery["status"] | "not_attempted";
+
 type EventOption = { slug: string; name: string; category: "technical" | "non-technical" };
 
 type SortField = "created_at" | "full_name" | "college_name";
 type CategoryFilter = "all" | "technical" | "non-technical";
+type StatusFilter = "all" | "complete" | "pending_partner";
 
 const PAGE_SIZE = 20;
 
@@ -83,12 +103,15 @@ function ParticipantsPage() {
   const search = useDebounced(searchInput, 350);
   const [eventFilter, setEventFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sortField, setSortField] = useState<SortField>("created_at");
   const [sortAsc, setSortAsc] = useState(false);
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Registration | null>(null);
+  const [resendingDeliveryId, setResendingDeliveryId] = useState<string | null>(null);
+  const [generatingCard, setGeneratingCard] = useState(false);
 
-  const filterKey = `${search}|${eventFilter}|${categoryFilter}|${sortField}|${sortAsc}`;
+  const filterKey = `${search}|${eventFilter}|${categoryFilter}|${statusFilter}|${sortField}|${sortAsc}`;
   const [lastFilterKey, setLastFilterKey] = useState(filterKey);
   if (filterKey !== lastFilterKey) {
     setLastFilterKey(filterKey);
@@ -179,6 +202,8 @@ function ParticipantsPage() {
         if (slugs.length) query = query.or(slugOverlapFilter(slugs));
       }
 
+      if (statusFilter !== "all") query = query.eq("status", statusFilter);
+
       query = query.order(sortField, { ascending: sortAsc });
 
       const from = page * PAGE_SIZE;
@@ -190,6 +215,110 @@ function ParticipantsPage() {
       return { rows: (data ?? []) as Registration[], count: count ?? 0 };
     },
   });
+
+  const deliveryLogQuery = useQuery({
+    queryKey: ["admin", "email-delivery", selected?.participant_id],
+    enabled: !!selected,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("email_delivery_log")
+        .select("id, participant_id, recipient_name, recipient_email, card_bucket, card_path, delivery_type, status, error_message, created_at")
+        .eq("participant_id", selected!.participant_id)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as EmailDelivery[];
+    },
+  });
+
+  const tableDeliveryStatusQuery = useQuery({
+    queryKey: ["admin", "email-delivery-status", registrationsQuery.data?.rows.map((row) => row.participant_id)],
+    enabled: !!registrationsQuery.data?.rows.length,
+    queryFn: async () => {
+      const participantIds = registrationsQuery.data!.rows.map((row) => row.participant_id);
+      const { data, error } = await supabase
+        .from("email_delivery_log")
+        .select("participant_id, status, created_at")
+        .in("participant_id", participantIds)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      const statusByParticipant: Record<string, DeliveryStatus> = {};
+      for (const item of data ?? []) {
+        if (!statusByParticipant[item.participant_id]) {
+          statusByParticipant[item.participant_id] = item.status as DeliveryStatus;
+        }
+      }
+      return statusByParticipant;
+    },
+  });
+
+  const resendDelivery = async (delivery: EmailDelivery) => {
+    if (!selected) return;
+    setResendingDeliveryId(delivery.id);
+    try {
+      const { data } = supabase.storage.from(delivery.card_bucket).getPublicUrl(delivery.card_path);
+      await sendRegistrationEmail(
+        delivery.recipient_name,
+        delivery.recipient_email,
+        delivery.participant_id,
+        data.publicUrl,
+        delivery.delivery_type === "pending_teammate",
+        delivery.delivery_type === "teammate_complete",
+        delivery.card_bucket,
+        delivery.card_path,
+        true,
+      );
+      toast.success(`Email resent to ${delivery.recipient_email}.`);
+      await deliveryLogQuery.refetch();
+    } catch (error) {
+      console.error(error);
+      toast.error("Couldn't resend the email. Check the delivery log error.");
+    } finally {
+      setResendingDeliveryId(null);
+    }
+  };
+
+  const generateAndSendCurrentCard = async () => {
+    if (!selected) return;
+    setGeneratingCard(true);
+    try {
+      const entryCardRegistration: EntryCardRegistration = {
+        id: selected.participant_id,
+        fullName: selected.full_name,
+        registerNumber: selected.register_no,
+        collegeName: selected.college_name,
+        email: selected.email,
+        phone: selected.phone,
+        events: selected.events,
+        createdAt: selected.created_at,
+        ...(selected.partner_full_name ? { partnerFullName: selected.partner_full_name } : {}),
+        ...(selected.event_partners ? { eventPartners: selected.event_partners } : {}),
+      };
+      const destination = selected.status === "pending_partner" ? "teammate" : "primary";
+      const card = await uploadEntryCard(
+        selected.participant_id,
+        await getEntryCardBlob(entryCardRegistration),
+        destination,
+      );
+      await sendRegistrationEmail(
+        selected.full_name,
+        selected.email,
+        selected.participant_id,
+        card.imageUrl,
+        selected.status === "pending_partner",
+        false,
+        card.bucket,
+        card.path,
+        true,
+      );
+      toast.success(`Card generated and emailed to ${selected.email}.`);
+      await deliveryLogQuery.refetch();
+    } catch (error) {
+      console.error(error);
+      toast.error("Couldn't generate or send this card. Check Supabase Edge Function logs.");
+    } finally {
+      setGeneratingCard(false);
+    }
+  };
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -397,6 +526,17 @@ function ParticipantsPage() {
               )}
             </div>
 
+            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="All statuses" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="complete">Complete</SelectItem>
+                <SelectItem value="pending_partner">Pending teammate</SelectItem>
+              </SelectContent>
+            </Select>
+
             <Select
               value={categoryFilter}
               onValueChange={(v) => {
@@ -456,6 +596,7 @@ function ParticipantsPage() {
                         onClick={() => toggleSort("full_name")}
                       />
                       <TableHead>Register No.</TableHead>
+                      <TableHead>Card email</TableHead>
                       <SortableHead
                         label="College"
                         active={sortField === "college_name"}
@@ -481,6 +622,30 @@ function ParticipantsPage() {
                       >
                         <TableCell className="font-medium text-foreground">{r.full_name}</TableCell>
                         <TableCell className="text-muted-foreground">{r.register_no}</TableCell>
+                        <TableCell>
+                          {(() => {
+                            const status = tableDeliveryStatusQuery.data?.[r.participant_id] ?? "not_attempted";
+                            return (
+                              <Badge
+                                variant={
+                                  status === "sent"
+                                    ? "default"
+                                    : status === "failed"
+                                      ? "destructive"
+                                      : "outline"
+                                }
+                              >
+                                {status === "not_attempted"
+                                  ? "Not attempted"
+                                  : status === "sending"
+                                    ? "Sending"
+                                    : status === "sent"
+                                      ? "Sent"
+                                      : "Failed"}
+                              </Badge>
+                            );
+                          })()}
+                        </TableCell>
                         <TableCell className="text-muted-foreground">{r.college_name}</TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-1">
@@ -593,6 +758,60 @@ function ParticipantsPage() {
                   </div>
                 ) : (
                   <p className="text-muted-foreground">Individual-event registration.</p>
+                )}
+              </div>
+              <div className="flex flex-col gap-2 border-t border-border pt-3">
+                <span className="font-medium text-foreground">Email delivery</span>
+                {deliveryLogQuery.isLoading ? (
+                  <p className="text-sm text-muted-foreground">Loading delivery history…</p>
+                ) : deliveryLogQuery.isError ? (
+                  <p className="text-sm text-destructive">Couldn't load email delivery history.</p>
+                ) : (deliveryLogQuery.data ?? []).length === 0 ? (
+                  <div>
+                    <p className="text-sm text-muted-foreground">No email attempt recorded yet.</p>
+                    <Button
+                      className="mt-3"
+                      size="sm"
+                      variant="outline"
+                      disabled={generatingCard}
+                      onClick={() => void generateAndSendCurrentCard()}
+                    >
+                      {generatingCard ? <RefreshCw className="mr-2 size-4 animate-spin" /> : <Mail className="mr-2 size-4" />}
+                      Generate and send card
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {deliveryLogQuery.data!.map((delivery) => (
+                      <div key={delivery.id} className="rounded-lg border border-border bg-secondary/30 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm text-foreground">{delivery.recipient_email}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {delivery.card_bucket === "teammate-entry-passes" ? "Teammate card" : "Participant card"}
+                              {" · "}{new Date(delivery.created_at).toLocaleString()}
+                            </p>
+                          </div>
+                          <Badge variant={delivery.status === "sent" ? "default" : delivery.status === "failed" ? "destructive" : "outline"}>
+                            {delivery.status}
+                          </Badge>
+                        </div>
+                        {delivery.error_message && (
+                          <p className="mt-2 text-xs text-destructive">{delivery.error_message}</p>
+                        )}
+                        <Button
+                          className="mt-3"
+                          size="sm"
+                          variant="outline"
+                          disabled={resendingDeliveryId === delivery.id}
+                          onClick={() => void resendDelivery(delivery)}
+                        >
+                          {resendingDeliveryId === delivery.id ? <RefreshCw className="mr-2 size-4 animate-spin" /> : <Mail className="mr-2 size-4" />}
+                          Resend card email
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>

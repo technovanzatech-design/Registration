@@ -7,6 +7,9 @@ export async function sendRegistrationEmail(
   imageUrl: string,
   pending = false,
   teammateComplete = false,
+  cardBucket: "entry-passes" | "teammate-entry-passes" = "entry-passes",
+  cardPath = `${participantId}.png`,
+  manualResend = false,
 ) {
   const { data, error } = await supabase.functions.invoke("send-registration-email", {
     body: {
@@ -16,6 +19,9 @@ export async function sendRegistrationEmail(
       imageUrl,
       pending,
       teammateComplete,
+      cardBucket,
+      cardPath,
+      manualResend,
     },
   });
 

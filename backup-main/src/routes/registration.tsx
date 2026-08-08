@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { AnimatePresence, motion } from "motion/react";
+import { toast } from "sonner";
 import { downloadEntryCard, getEntryCardBlob } from "@/lib/entryCard";
 
 import { uploadEntryCard } from "@/lib/storage";
@@ -415,6 +416,17 @@ function RegistrationPage() {
     const seats = seatsFor(id);
     const isFull = seats?.capacity != null && seats.registered_count >= seats.capacity;
 
+    if (
+      completingPartner &&
+      id === "techtalks" &&
+      (seats?.registered_count ?? 0) >= TECHTALKS_REGULAR_SEATS
+    ) {
+      setSubmitError(
+        "The regular TechTalks teams are full. Bonus TechTalks slots are only for a new TechTalks-only team.",
+      );
+      return;
+    }
+
     setSelected((current) => {
       const alreadySelected = current.includes(id);
       if (alreadySelected) {
@@ -525,11 +537,31 @@ function RegistrationPage() {
     setResult(record);
     setSubmitting(false);
 
-    try {
-      const blob = await getEntryCardBlob(record);
-      const imageUrl = await uploadEntryCard(record.id, blob);
-      await sendRegistrationEmail(record.fullName, record.email, record.id, imageUrl);
-      for (const teammate of record.pendingTeammates ?? []) {
+    const sendCardAndEmail = async (
+      recipient: Registration,
+      destination: "primary" | "teammate",
+      pending = false,
+      teammateComplete = false,
+    ) => {
+      const blob = await getEntryCardBlob(recipient);
+      const card = await uploadEntryCard(recipient.id, blob, destination);
+      await sendRegistrationEmail(
+        recipient.fullName,
+        recipient.email,
+        recipient.id,
+        card.imageUrl,
+        pending,
+        teammateComplete,
+        card.bucket,
+        card.path,
+      );
+      return card.imageUrl;
+    };
+
+    // One recipient failing must never stop email delivery to the rest of a team.
+    const deliveryResults = await Promise.allSettled([
+      sendCardAndEmail(record, "primary"),
+      ...(record.pendingTeammates ?? []).map(async (teammate) => {
         const currentDetails = await getRegistrationCardDetails(teammate.id);
         const fallbackEventPartners = Object.fromEntries(
           teammate.events.map((event) => [event, { fullName: teammate.partnerFullName ?? "" }]),
@@ -541,20 +573,22 @@ function RegistrationPage() {
               eventPartners: currentDetails.eventPartners ?? fallbackEventPartners,
             }
           : { ...teammate, eventPartners: fallbackEventPartners };
-        const teammateBlob = await getEntryCardBlob(teammateRecord);
-        const teammateImageUrl = await uploadEntryCard(teammateRecord.id, teammateBlob);
-        await sendRegistrationEmail(
-          teammateRecord.fullName,
-          teammateRecord.email,
-          teammateRecord.id,
-          teammateImageUrl,
+        return sendCardAndEmail(
+          teammateRecord,
+          "teammate",
           currentDetails?.status === "pending_partner",
           currentDetails?.status === "complete" && currentDetails.events.length === 2,
         );
-      }
-      console.log("Uploaded Entry Card:", imageUrl);
-    } catch (error) {
-      console.error("Card/email failed (registration itself succeeded):", error);
+      }),
+    ]);
+    const failures = deliveryResults.filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failures.length) {
+      console.error("Some card/email deliveries failed:", failures);
+      toast.error(
+        "Registration is saved, but one or more emails are pending. The coordinator can resend them.",
+      );
     }
   };
 
@@ -740,7 +774,10 @@ function RegistrationPage() {
                 title="Choose Events"
                 caption={
                   completingPartner
-                    ? "Choose one event from your remaining category."
+                    ? lockedCategory === "non-technical" &&
+                        (seatsFor("techtalks")?.registered_count ?? 0) >= TECHTALKS_REGULAR_SEATS
+                      ? "Choose a technical event other than TechTalks. Bonus TechTalks slots are for new TechTalks-only teams."
+                      : "Choose one event from your remaining category."
                     : isTechTalksBonus
                       ? "TechTalks regular teams are full. You can register for TechTalks only."
                       : "Select exactly one technical event and one non-technical event."
@@ -758,7 +795,12 @@ function RegistrationPage() {
                   categoryEvents={events.filter(
                     (e) =>
                       e.category === "technical" &&
-                      (!completingPartner || lockedCategory !== "technical"),
+                      (!completingPartner || lockedCategory !== "technical") &&
+                      !(
+                        completingPartner &&
+                        e.id === "techtalks" &&
+                        (seatsFor("techtalks")?.registered_count ?? 0) >= TECHTALKS_REGULAR_SEATS
+                      ),
                   )}
                   selectedId={selectedTechnical}
                   seatsFor={seatsFor}

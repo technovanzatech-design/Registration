@@ -1,4 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -12,7 +13,14 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   }
   return btoa(binary);
 }
+
+const serviceClient = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+);
+
 Deno.serve(async (req) => {
+  let deliveryId: string | null = null;
   // Handle browser preflight request
   if (req.method === "OPTIONS") {
     return new Response("ok", {
@@ -28,7 +36,33 @@ Deno.serve(async (req) => {
       imageUrl,
       pending = false,
       teammateComplete = false,
+      cardBucket = "entry-passes",
+      cardPath = `${participantId}.png`,
+      manualResend = false,
     } = await req.json();
+    const deliveryType = manualResend
+      ? "manual_resend"
+      : pending
+        ? "pending_teammate"
+        : teammateComplete
+          ? "teammate_complete"
+          : "registration";
+
+    const { data: delivery, error: deliveryError } = await serviceClient
+      .from("email_delivery_log")
+      .insert({
+        participant_id: participantId,
+        recipient_name: studentName,
+        recipient_email: studentEmail,
+        card_bucket: cardBucket,
+        card_path: cardPath,
+        delivery_type: deliveryType,
+        status: "sending",
+      })
+      .select("id")
+      .single();
+    if (deliveryError) console.error("Could not start email delivery log:", deliveryError.message);
+    deliveryId = delivery?.id ?? null;
     const pendingNotice = pending
       ? `<p><strong>Your teammate reserved your team-event seat.</strong> Return to registration with your register number, Gmail and phone number to choose your remaining event.</p><p>Your provisional one-event card is attached.</p>`
       : "";
@@ -126,10 +160,28 @@ Deno.serve(async (req) => {
     const data = await brevoResponse.json();
 
     if (!brevoResponse.ok) {
+      if (deliveryId) {
+        await serviceClient
+          .from("email_delivery_log")
+          .update({ status: "failed", error_message: data?.message ?? JSON.stringify(data), updated_at: new Date().toISOString() })
+          .eq("id", deliveryId);
+      }
       return new Response(JSON.stringify(data), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    if (deliveryId) {
+      await serviceClient
+        .from("email_delivery_log")
+        .update({
+          status: "sent",
+          provider_message_id: data?.messageId ?? null,
+          error_message: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", deliveryId);
     }
 
     return new Response(
@@ -144,6 +196,16 @@ Deno.serve(async (req) => {
       },
     );
   } catch (err) {
+    if (deliveryId) {
+      await serviceClient
+        .from("email_delivery_log")
+        .update({
+          status: "failed",
+          error_message: err instanceof Error ? err.message : String(err),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", deliveryId);
+    }
     return new Response(
       JSON.stringify({
         success: false,
