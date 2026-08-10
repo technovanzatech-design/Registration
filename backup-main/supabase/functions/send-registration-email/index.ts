@@ -63,8 +63,12 @@ Deno.serve(async (req) => {
       .single();
     if (deliveryError) console.error("Could not start email delivery log:", deliveryError.message);
     deliveryId = delivery?.id ?? null;
+    const registrationUrl = Deno.env.get("REGISTRATION_URL") ?? "https://technovanza26.in";
     const pendingNotice = pending
-      ? `<p><strong>Your teammate reserved your team-event seat.</strong> Return to registration with your register number, Gmail and phone number to choose your remaining event.</p><p>Your provisional one-event card is attached.</p>`
+      ? `<p><strong>Your teammate reserved your team-event seat.</strong> Use the button below to choose your remaining event with your register number, Gmail and phone number.</p>
+         <p style="margin:28px 0"><a href="${registrationUrl}" style="display:inline-block;background:#ef4444;color:#ffffff;padding:13px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Complete registration</a></p>
+         <p style="font-size:13px;color:#cbd5e1">If the button does not open, visit: <a href="${registrationUrl}" style="color:#67e8f9">${registrationUrl}</a></p>
+         <p>Your provisional one-event card is attached.</p>`
       : "";
     const teammateCompleteNotice = teammateComplete
       ? `<p><strong>Your teammate completed your registration for both your Technical and Non-Technical events.</strong> You do not need to register again.</p>`

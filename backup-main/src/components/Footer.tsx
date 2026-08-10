@@ -1,8 +1,7 @@
 import { ArrowLeft, Linkedin, Mail, Phone, Cpu } from "lucide-react";
 import { site } from "@/data/site";
 
-// Replace # with the URL of the main TECHNOVANZA information website after it is hosted.
-const HOME_WEBSITE_URL = "https://technovanza-2026-sftp.onrender.com/";
+const HOME_WEBSITE_URL = "https://technovanza26.in";
 
 export function Footer() {
   return (
