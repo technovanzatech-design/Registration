@@ -926,9 +926,6 @@ function RegistrationPage() {
                           ? "Nexus teammate details"
                           : "Fun Feast teammate details"}
                       </p>
-                      <p className="mb-4 text-xs text-muted-foreground">
-                        This can be a different teammate from TechTalks.
-                      </p>
                       <div className="grid gap-3 sm:grid-cols-2">
                         {(
                           [
