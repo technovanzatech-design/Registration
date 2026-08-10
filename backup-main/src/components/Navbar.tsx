@@ -66,14 +66,7 @@ export function Navbar() {
               </Link>
             </li>
           ))}
-          <li className="ml-2">
-            <Link
-              to="/registration"
-              className="bg-aurora glow-cyan inline-flex items-center rounded-xl px-5 py-2 text-sm font-semibold text-primary-foreground transition-transform hover:scale-105"
-            >
-              Register
-            </Link>
-          </li>
+         
         </ul>
 
         <button
