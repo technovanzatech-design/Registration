@@ -484,9 +484,15 @@ function RegistrationPage() {
 
     let record: Registration;
     try {
+      // A reserved teammate's Gmail and phone are the database-authoritative
+      // values. Use them directly instead of a possibly stale form snapshot.
+      const completionValues = reservedTeammate
+        ? { ...values, email: reservedTeammate.email, phone: reservedTeammate.phone }
+        : values;
+
       record = completingPartner
         ? await completePartnerRegistration({
-            ...values,
+            ...completionValues,
             events: selected,
             partnerFullName: partner.fullName,
             partnerRegisterNo: partner.registerNumber,

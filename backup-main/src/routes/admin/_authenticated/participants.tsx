@@ -60,6 +60,7 @@ type Registration = {
 
 type EmailDelivery = {
   id: string;
+  registration_id: string | null;
   participant_id: string;
   recipient_name: string;
   recipient_email: string;
@@ -217,13 +218,13 @@ function ParticipantsPage() {
   });
 
   const deliveryLogQuery = useQuery({
-    queryKey: ["admin", "email-delivery", selected?.participant_id],
+    queryKey: ["admin", "email-delivery", selected?.id],
     enabled: !!selected,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("email_delivery_log")
-        .select("id, participant_id, recipient_name, recipient_email, card_bucket, card_path, delivery_type, status, error_message, created_at")
-        .eq("participant_id", selected!.participant_id)
+        .select("id, registration_id, participant_id, recipient_name, recipient_email, card_bucket, card_path, delivery_type, status, error_message, created_at")
+        .eq("registration_id", selected!.id)
         .order("created_at", { ascending: false });
       if (error) throw error;
       return (data ?? []) as EmailDelivery[];
@@ -231,14 +232,14 @@ function ParticipantsPage() {
   });
 
   const tableDeliveryStatusQuery = useQuery({
-    queryKey: ["admin", "email-delivery-status", registrationsQuery.data?.rows.map((row) => row.participant_id)],
+    queryKey: ["admin", "email-delivery-status", registrationsQuery.data?.rows.map((row) => row.id)],
     enabled: !!registrationsQuery.data?.rows.length,
     queryFn: async () => {
-      const participantIds = registrationsQuery.data!.rows.map((row) => row.participant_id);
+      const registrationIds = registrationsQuery.data!.rows.map((row) => row.id);
       const { data, error } = await supabase
         .from("email_delivery_log")
-        .select("participant_id, status, created_at")
-        .in("participant_id", participantIds)
+        .select("registration_id, participant_id, status, created_at")
+        .in("registration_id", registrationIds)
         .order("created_at", { ascending: false });
       if (error) throw error;
       const statusByParticipant: Record<string, DeliveryStatus> = {};

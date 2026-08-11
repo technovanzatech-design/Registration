@@ -48,9 +48,19 @@ Deno.serve(async (req) => {
           ? "teammate_complete"
           : "registration";
 
+    // Receipt IDs can be reset during testing. Resolve the permanent row UUID
+    // so an old delivery attempt can never be shown for a newer participant
+    // who later receives the same receipt ID.
+    const { data: registration } = await serviceClient
+      .from("registrations")
+      .select("id")
+      .eq("participant_id", participantId)
+      .maybeSingle();
+
     const { data: delivery, error: deliveryError } = await serviceClient
       .from("email_delivery_log")
       .insert({
+        registration_id: registration?.id ?? null,
         participant_id: participantId,
         recipient_name: studentName,
         recipient_email: studentEmail,
