@@ -763,24 +763,26 @@ function ParticipantsPage() {
               </div>
               <div className="flex flex-col gap-2 border-t border-border pt-3">
                 <span className="font-medium text-foreground">Email delivery</span>
+                <div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={generatingCard}
+                    onClick={() => void generateAndSendCurrentCard()}
+                  >
+                    {generatingCard ? <RefreshCw className="mr-2 size-4 animate-spin" /> : <Mail className="mr-2 size-4" />}
+                    Generate and send current card
+                  </Button>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Recreates the PNG using the current Supabase details before emailing it.
+                  </p>
+                </div>
                 {deliveryLogQuery.isLoading ? (
                   <p className="text-sm text-muted-foreground">Loading delivery history…</p>
                 ) : deliveryLogQuery.isError ? (
                   <p className="text-sm text-destructive">Couldn't load email delivery history.</p>
                 ) : (deliveryLogQuery.data ?? []).length === 0 ? (
-                  <div>
-                    <p className="text-sm text-muted-foreground">No email attempt recorded yet.</p>
-                    <Button
-                      className="mt-3"
-                      size="sm"
-                      variant="outline"
-                      disabled={generatingCard}
-                      onClick={() => void generateAndSendCurrentCard()}
-                    >
-                      {generatingCard ? <RefreshCw className="mr-2 size-4 animate-spin" /> : <Mail className="mr-2 size-4" />}
-                      Generate and send card
-                    </Button>
-                  </div>
+                  <p className="text-sm text-muted-foreground">No email attempt recorded yet.</p>
                 ) : (
                   <div className="flex flex-col gap-2">
                     {deliveryLogQuery.data!.map((delivery) => (
