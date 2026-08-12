@@ -282,36 +282,47 @@ function ParticipantsPage() {
     if (!selected) return;
     setGeneratingCard(true);
     try {
+      // Reload first: coordinators sometimes correct details in Supabase while
+      // this dialog is already open. A card must use those latest values.
+      const { data: latest, error: latestError } = await supabase
+        .from("registrations")
+        .select("id, participant_id, full_name, register_no, college_name, email, phone, events, partner_full_name, event_partners, status, created_at")
+        .eq("id", selected.id)
+        .single();
+      if (latestError) throw latestError;
+      const current = latest as Registration;
+
       const entryCardRegistration: EntryCardRegistration = {
-        id: selected.participant_id,
-        fullName: selected.full_name,
-        registerNumber: selected.register_no,
-        collegeName: selected.college_name,
-        email: selected.email,
-        phone: selected.phone,
-        events: selected.events,
-        createdAt: selected.created_at,
-        ...(selected.partner_full_name ? { partnerFullName: selected.partner_full_name } : {}),
-        ...(selected.event_partners ? { eventPartners: selected.event_partners } : {}),
+        id: current.participant_id,
+        fullName: current.full_name,
+        registerNumber: current.register_no,
+        collegeName: current.college_name,
+        email: current.email,
+        phone: current.phone,
+        events: current.events,
+        createdAt: current.created_at,
+        ...(current.partner_full_name ? { partnerFullName: current.partner_full_name } : {}),
+        ...(current.event_partners ? { eventPartners: current.event_partners } : {}),
       };
-      const destination = selected.status === "pending_partner" ? "teammate" : "primary";
+      const destination = current.status === "pending_partner" ? "teammate" : "primary";
       const card = await uploadEntryCard(
-        selected.participant_id,
+        current.participant_id,
         await getEntryCardBlob(entryCardRegistration),
         destination,
       );
       await sendRegistrationEmail(
-        selected.full_name,
-        selected.email,
-        selected.participant_id,
+        current.full_name,
+        current.email,
+        current.participant_id,
         card.imageUrl,
-        selected.status === "pending_partner",
+        current.status === "pending_partner",
         false,
         card.bucket,
         card.path,
         true,
       );
-      toast.success(`Card generated and emailed to ${selected.email}.`);
+      setSelected(current);
+      toast.success(`Card generated and emailed to ${current.email}.`);
       await deliveryLogQuery.refetch();
     } catch (error) {
       console.error(error);
