@@ -21,7 +21,6 @@ import {
   Download,
   Home,
   Loader2,
-  ShieldAlert,
   ShieldCheck,
   X,
 } from "lucide-react";
@@ -606,24 +605,42 @@ function RegistrationPage() {
     );
   }
 
-  if (false) {
+  const registrationsAreFull =
+    capacities != null &&
+    capacities.length > 0 &&
+    capacities.every(
+      (event) => event.capacity != null && event.registered_count >= event.capacity,
+    );
+
+  if (registrationsAreFull) {
     return (
-      <div className="mx-auto flex max-w-lg flex-col items-center px-6 pt-40 pb-10 text-center">
-        <span className="glass flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/40">
-          <ShieldAlert className="h-8 w-8 text-primary" strokeWidth={1.5} />
-        </span>
-        <h1 className="mt-6 font-display text-2xl font-bold text-foreground">
-          Registrations Are Full
+      <main className="relative mx-auto flex min-h-[calc(100vh-7rem)] max-w-5xl items-center justify-center px-6 py-16 sm:py-24">
+        <div className="glass relative w-full max-w-2xl overflow-hidden rounded-[2rem] border border-primary/35 p-5 text-center shadow-[0_0_70px_hsl(var(--primary)/0.16)] sm:p-8">
+          <div className="pointer-events-none absolute inset-x-12 top-0 h-px bg-gradient-to-r from-transparent via-primary to-transparent" />
+          <div className="mx-auto overflow-hidden rounded-2xl border border-primary/30 bg-white shadow-[0_0_36px_hsl(var(--primary)/0.18)]">
+            <img
+              src="/registration-closed.jpg"
+              alt="Registration closed"
+              className="h-64 w-full object-cover object-center contrast-110 saturate-[0.8] sm:h-80"
+            />
+          </div>
+        <h1 className="mt-8 font-display text-2xl leading-relaxed font-bold tracking-[0.08em] text-foreground uppercase sm:text-4xl sm:leading-snug sm:tracking-[0.12em]">
+          WE CAN&apos;T JOIN THIS TIME,
+          <span className="mt-2 block text-aurora">WE MEET NEXT TIME</span>
         </h1>
-        <p className="mt-3 text-sm text-muted-foreground">
+        <p className="mt-5 text-sm tracking-wide text-muted-foreground">
+          Registration for {site.symposium} is now closed.
+        </p>
+        <p className="hidden">
           All {TOTAL_CAP} participant slots for {site.symposium} have been filled. Thank you for
           your interest — please contact the coordinators below for waitlist information.
         </p>
-        <div className="glass mt-8 rounded-2xl border border-border p-5 text-sm text-muted-foreground">
+        <div className="hidden">
           <p>{site.studentCoordinator.name}</p>
           <p className="text-primary">{site.studentCoordinator.phone}</p>
         </div>
-      </div>
+        </div>
+      </main>
     );
   }
 
