@@ -197,7 +197,10 @@ function ParticipantsPage() {
       }
 
       if (eventFilter !== "all") {
-        query = query.contains("events", [eventFilter]);
+        // `events` is a jsonb array. Use the same PostgREST expression as
+        // the category filter because the client's `.contains()` helper can
+        // serialize a single selected slug differently from this database.
+        query = query.or(slugOverlapFilter([eventFilter]));
       } else if (categoryFilter !== "all") {
         const slugs = categoryFilter === "technical" ? technicalSlugs : nonTechnicalSlugs;
         if (slugs.length) query = query.or(slugOverlapFilter(slugs));
@@ -372,7 +375,7 @@ function ParticipantsPage() {
       }
 
       if (eventFilter !== "all") {
-        query = query.contains("events", [eventFilter]);
+        query = query.or(slugOverlapFilter([eventFilter]));
       } else if (categoryFilter !== "all") {
         const slugs = categoryFilter === "technical" ? technicalSlugs : nonTechnicalSlugs;
         if (slugs.length) query = query.or(slugOverlapFilter(slugs));
