@@ -15,6 +15,11 @@ export type ScheduleAssignment = { registration_id: string; event_slug: string; 
 const partnerNo = (registration: SchedulerRegistration, event: string) =>
   registration.event_partners?.[event]?.registerNumber ?? registration.partner_register_no ?? null;
 
+// A registration should contain each event once. This defensive helper keeps
+// a legacy/manual duplicate in the JSON array from consuming a second seat
+// during timetable generation.
+const uniqueEvents = (registration: SchedulerRegistration) => [...new Set(registration.events)];
+
 const teamKey = (registration: SchedulerRegistration, event: string) => {
   const partner = partnerNo(registration, event);
   return partner ? [registration.register_no, partner].sort().join(":") : null;
@@ -44,7 +49,7 @@ export function createTwoSlotSchedule(
   const union = new UnionFind(registrations.length);
 
   registrations.forEach((registration, index) => {
-    registration.events.forEach((eventSlug) => {
+    uniqueEvents(registration).forEach((eventSlug) => {
       if (eventBySlug.get(eventSlug)?.team_size !== 2) return;
       const teammateIndex = byRegisterNo.get(partnerNo(registration, eventSlug) ?? "");
       if (teammateIndex != null) union.union(index, teammateIndex);
@@ -89,7 +94,7 @@ export function createTwoSlotSchedule(
   });
 
   for (const component of groups) {
-    const technical = component.flatMap((registration) => registration.events
+    const technical = component.flatMap((registration) => uniqueEvents(registration)
       .filter((event) => eventBySlug.get(event)?.category === "technical")
       .flatMap((event) => {
         if (event !== "techtalks") return [{ registration, event }];
@@ -98,7 +103,7 @@ export function createTwoSlotSchedule(
         if (key) excludedTechTalkTeams.add(key);
         return [];
       }));
-    const nonTechnical = component.flatMap((registration) => registration.events
+    const nonTechnical = component.flatMap((registration) => uniqueEvents(registration)
       .filter((event) => eventBySlug.get(event)?.category === "non-technical")
       .map((event) => ({ registration, event })));
 
