@@ -76,7 +76,19 @@ export function createTwoSlotSchedule(
     assignments.push({ registration_id: registration.id, event_slug: event, slot_id: slot.id });
   };
 
-  for (const component of components.values()) {
+  // Schedule constrained groups first. A group that has a technical event
+  // has only one possible non-technical slot (the opposite one), while a
+  // participant without a technical event can use either slot. This prevents
+  // flexible participants from consuming a seat needed by a constrained team.
+  const groups = [...components.values()].sort((a, b) => {
+    const technicalCount = (group: SchedulerRegistration[]) => group.reduce(
+      (count, registration) => count + registration.events.filter((event) => eventBySlug.get(event)?.category === "technical").length,
+      0,
+    );
+    return technicalCount(b) - technicalCount(a) || b.length - a.length;
+  });
+
+  for (const component of groups) {
     const technical = component.flatMap((registration) => registration.events
       .filter((event) => eventBySlug.get(event)?.category === "technical")
       .flatMap((event) => {
@@ -86,21 +98,29 @@ export function createTwoSlotSchedule(
         if (key) excludedTechTalkTeams.add(key);
         return [];
       }));
-    const technicalSlot: 1 | 2 | null = !technical.length
-      ? null
-      : canFit(technical.map((item) => ({ event: item.event })), 1) && canFit(technical.map((item) => ({ event: item.event })), 2)
-        ? (assignments.filter((a) => slots.find((slot) => slot.id === a.slot_id)?.slot_number === 1).length <= assignments.filter((a) => slots.find((slot) => slot.id === a.slot_id)?.slot_number === 2).length ? 1 : 2)
-        : canFit(technical.map((item) => ({ event: item.event })), 1) ? 1 : canFit(technical.map((item) => ({ event: item.event })), 2) ? 2 : null;
-    if (technical.length && technicalSlot == null) throw new Error(`No safe technical slot is available for ${component.map((r) => r.full_name).join(", ")}.`);
-    technical.forEach(({ registration, event }) => add(registration, event, technicalSlot!));
-
     const nonTechnical = component.flatMap((registration) => registration.events
       .filter((event) => eventBySlug.get(event)?.category === "non-technical")
       .map((event) => ({ registration, event })));
-    if (!nonTechnical.length) continue;
-    const preferred: Array<1 | 2> = technicalSlot ? [technicalSlot === 1 ? 2 : 1] : [1, 2];
-    const nonTechnicalSlot = preferred.find((number) => canFit(nonTechnical.map((item) => ({ event: item.event })), number));
-    if (!nonTechnicalSlot) throw new Error(`No safe non-technical slot is available for ${component.map((r) => r.full_name).join(", ")}.`);
+
+    // Choose a complete pair before committing anything. The earlier version
+    // placed Technical first, then discovered too late that its opposite
+    // Non-Technical slot was full. That produced errors for valid students.
+    const candidates: Array<{ technicalSlot: 1 | 2 | null; nonTechnicalSlot: 1 | 2 | null }> = technical.length
+      ? [{ technicalSlot: 1, nonTechnicalSlot: nonTechnical.length ? 2 : null }, { technicalSlot: 2, nonTechnicalSlot: nonTechnical.length ? 1 : null }]
+      : nonTechnical.length
+        ? [{ technicalSlot: null, nonTechnicalSlot: 1 }, { technicalSlot: null, nonTechnicalSlot: 2 }]
+        : [{ technicalSlot: null, nonTechnicalSlot: null }];
+    const choice = candidates.find((candidate) =>
+      (!candidate.technicalSlot || canFit(technical.map((item) => ({ event: item.event })), candidate.technicalSlot)) &&
+      (!candidate.nonTechnicalSlot || canFit(nonTechnical.map((item) => ({ event: item.event })), candidate.nonTechnicalSlot)),
+    );
+    if (!choice) {
+      const eventNames = [...new Set(nonTechnical.map((item) => item.event))].join(", ");
+      throw new Error(`No safe slot is available for ${component.map((r) => r.full_name).join(", ")}. ${eventNames ? `Both slots for the selected event (${eventNames}) are already full.` : ""}`);
+    }
+    if (choice.technicalSlot) technical.forEach(({ registration, event }) => add(registration, event, choice.technicalSlot!));
+    if (!nonTechnical.length || !choice.nonTechnicalSlot) continue;
+    const nonTechnicalSlot = choice.nonTechnicalSlot;
     nonTechnical.forEach(({ registration, event }) => add(registration, event, nonTechnicalSlot));
   }
   return { assignments, excludedTechTalkTeams: [...excludedTechTalkTeams] };
