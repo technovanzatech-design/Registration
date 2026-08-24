@@ -55,6 +55,16 @@ function SchedulePage() {
     try {
       const workbook = XLSX.utils.book_new();
       const allRows = assignments.data;
+      const registrationByNumber = new Map((registrations.data ?? []).map((registration) => [registration.register_no, registration]));
+      const teammateFor = (row: Assignment) => {
+        const event = events.data?.find((item) => item.slug === row.event_slug);
+        if (event?.team_size !== 2) return "-";
+        const registration = registrationByNumber.get(row.register_no);
+        const teammateNumber = registration?.event_partners?.[row.event_slug]?.registerNumber ?? registration?.partner_register_no;
+        if (!teammateNumber) return "Teammate details unavailable";
+        const teammate = registrationByNumber.get(teammateNumber);
+        return teammate ? `${teammate.full_name} (${teammate.register_no})` : `Register No. ${teammateNumber}`;
+      };
       const overview = XLSX.utils.aoa_to_sheet([
         ["TECHNOVANZA 2026 - FINAL EVENT SCHEDULE"],
         ["Conflict-checked timetable export"],
@@ -75,13 +85,13 @@ function SchedulePage() {
           [`TECHNOVANZA 2026 - SLOT ${slotNumber}`],
           [`Time: ${slotTime}`],
           [],
-          ["Event", "Room / Venue", "Time", "Participant Name", "Register Number"],
-          ...rows.map((row) => [row.event_name, row.room, `${time(row.start_time)} - ${time(row.end_time)}`, row.full_name, String(row.register_no)]),
+          ["Event", "Room / Venue", "Time", "Participant Name", "Teammate", "Register Number"],
+          ...rows.map((row) => [row.event_name, row.room, `${time(row.start_time)} - ${time(row.end_time)}`, row.full_name, teammateFor(row), String(row.register_no)]),
         ]);
-        sheet["!cols"] = [{ wch: 25 }, { wch: 34 }, { wch: 24 }, { wch: 30 }, { wch: 20 }];
-        sheet["!autofilter"] = { ref: `A4:E${Math.max(rows.length + 4, 4)}` };
+        sheet["!cols"] = [{ wch: 25 }, { wch: 34 }, { wch: 24 }, { wch: 30 }, { wch: 32 }, { wch: 20 }];
+        sheet["!autofilter"] = { ref: `A4:F${Math.max(rows.length + 4, 4)}` };
         for (let index = 0; index < rows.length; index++) {
-          const cell = sheet[`E${index + 5}`];
+          const cell = sheet[`F${index + 5}`];
           if (cell) { cell.t = "s"; cell.z = "@"; }
         }
         XLSX.utils.book_append_sheet(workbook, sheet, `Slot ${slotNumber}`);
