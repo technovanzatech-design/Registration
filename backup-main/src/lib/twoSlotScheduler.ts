@@ -93,7 +93,14 @@ export function createTwoSlotSchedule(
     return technicalCount(b) - technicalCount(a) || b.length - a.length;
   });
 
-  for (const component of groups) {
+  type PlannedItem = {
+    component: SchedulerRegistration[];
+    technical: Array<{ registration: SchedulerRegistration; event: string }>;
+    nonTechnical: Array<{ registration: SchedulerRegistration; event: string }>;
+    candidates: Array<{ technicalSlot: 1 | 2 | null; nonTechnicalSlot: 1 | 2 | null }>;
+  };
+
+  const items: PlannedItem[] = groups.map((component) => {
     const technical = component.flatMap((registration) => uniqueEvents(registration)
       .filter((event) => eventBySlug.get(event)?.category === "technical")
       .flatMap((event) => {
@@ -107,26 +114,76 @@ export function createTwoSlotSchedule(
       .filter((event) => eventBySlug.get(event)?.category === "non-technical")
       .map((event) => ({ registration, event })));
 
-    // Choose a complete pair before committing anything. The earlier version
-    // placed Technical first, then discovered too late that its opposite
-    // Non-Technical slot was full. That produced errors for valid students.
-    const candidates: Array<{ technicalSlot: 1 | 2 | null; nonTechnicalSlot: 1 | 2 | null }> = technical.length
+    return {
+      component,
+      technical,
+      nonTechnical,
+      // Each option is a complete, non-overlapping two-event timetable for
+      // this connected group.
+      candidates: technical.length
       ? [{ technicalSlot: 1, nonTechnicalSlot: nonTechnical.length ? 2 : null }, { technicalSlot: 2, nonTechnicalSlot: nonTechnical.length ? 1 : null }]
       : nonTechnical.length
         ? [{ technicalSlot: null, nonTechnicalSlot: 1 }, { technicalSlot: null, nonTechnicalSlot: 2 }]
-        : [{ technicalSlot: null, nonTechnicalSlot: null }];
-    const choice = candidates.find((candidate) =>
-      (!candidate.technicalSlot || canFit(technical.map((item) => ({ event: item.event })), candidate.technicalSlot)) &&
-      (!candidate.nonTechnicalSlot || canFit(nonTechnical.map((item) => ({ event: item.event })), candidate.nonTechnicalSlot)),
-    );
-    if (!choice) {
-      const eventNames = [...new Set(nonTechnical.map((item) => item.event))].join(", ");
-      throw new Error(`No safe slot is available for ${component.map((r) => r.full_name).join(", ")}. ${eventNames ? `Both slots for the selected event (${eventNames}) are already full.` : ""}`);
+        : [{ technicalSlot: null, nonTechnicalSlot: null }],
+    };
+  });
+
+  const reserve = (entries: Array<{ event: string }>, number: 1 | 2 | null, direction: 1 | -1) => {
+    if (!number) return;
+    entries.forEach(({ event }) => {
+      const slot = slotByEventAndNumber.get(`${event}:${number}`);
+      if (!slot) throw new Error(`No Slot ${number} is configured for ${event}.`);
+      used.set(slot.id, (used.get(slot.id) ?? 0) + direction);
+    });
+  };
+  const candidateFits = (item: PlannedItem, candidate: PlannedItem["candidates"][number]) =>
+    (!candidate.technicalSlot || canFit(item.technical.map((entry) => ({ event: entry.event })), candidate.technicalSlot)) &&
+    (!candidate.nonTechnicalSlot || canFit(item.nonTechnical.map((entry) => ({ event: entry.event })), candidate.nonTechnicalSlot));
+  const candidateLoad = (item: PlannedItem, candidate: PlannedItem["candidates"][number]) => {
+    const load = (entries: Array<{ event: string }>, number: 1 | 2 | null) => !number ? 0 : entries.reduce((total, { event }) => {
+      const slot = slotByEventAndNumber.get(`${event}:${number}`);
+      return total + (slot?.participant_capacity ? ((used.get(slot.id) ?? 0) + 1) / slot.participant_capacity : 0);
+    }, 0);
+    return load(item.technical, candidate.technicalSlot) + load(item.nonTechnical, candidate.nonTechnicalSlot);
+  };
+
+  // Greedy assignment can fill one Nexus slot and only later discover that a
+  // valid team needs that exact slot. Search both valid orientations and undo
+  // earlier choices when needed. This is small (two possible slots per group)
+  // but guarantees we do not reject a valid 30-participant event merely due to
+  // registration order.
+  const choices = new Map<number, PlannedItem["candidates"][number]>();
+  let checkedBranches = 0;
+  const place = (index: number): boolean => {
+    if (index === items.length) return true;
+    if (++checkedBranches > 250000) return false;
+    const item = items[index];
+    const validCandidates = item.candidates
+      .filter((candidate) => candidateFits(item, candidate))
+      .sort((a, b) => candidateLoad(item, a) - candidateLoad(item, b));
+    for (const candidate of validCandidates) {
+      reserve(item.technical, candidate.technicalSlot, 1);
+      reserve(item.nonTechnical, candidate.nonTechnicalSlot, 1);
+      choices.set(index, candidate);
+      if (place(index + 1)) return true;
+      choices.delete(index);
+      reserve(item.nonTechnical, candidate.nonTechnicalSlot, -1);
+      reserve(item.technical, candidate.technicalSlot, -1);
     }
-    if (choice.technicalSlot) technical.forEach(({ registration, event }) => add(registration, event, choice.technicalSlot!));
-    if (!nonTechnical.length || !choice.nonTechnicalSlot) continue;
-    const nonTechnicalSlot = choice.nonTechnicalSlot;
-    nonTechnical.forEach(({ registration, event }) => add(registration, event, nonTechnicalSlot));
+    return false;
+  };
+
+  if (!place(0)) {
+    const firstUnplaced = items[choices.size] ?? items[items.length - 1];
+    const eventNames = [...new Set(firstUnplaced.nonTechnical.map((item) => item.event))].join(", ");
+    throw new Error(`No conflict-free two-slot timetable is available for ${firstUnplaced.component.map((r) => r.full_name).join(", ")}. ${eventNames ? `The selected event (${eventNames}) needs more usable slot space.` : ""}`);
   }
+
+  items.forEach((item, index) => {
+    const choice = choices.get(index);
+    if (!choice) return;
+    if (choice.technicalSlot) item.technical.forEach(({ registration, event }) => add(registration, event, choice.technicalSlot!));
+    if (choice.nonTechnicalSlot) item.nonTechnical.forEach(({ registration, event }) => add(registration, event, choice.nonTechnicalSlot!));
+  });
   return { assignments, excludedTechTalkTeams: [...excludedTechTalkTeams] };
 }
