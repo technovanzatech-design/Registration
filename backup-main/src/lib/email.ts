@@ -50,3 +50,48 @@ export async function sendRegistrationEmail(
 
   return data;
 }
+
+export type ScheduleEmailItem = {
+  slotNumber: 1 | 2;
+  eventName: string;
+  startTime: string;
+  endTime: string;
+  room: string;
+  teammate?: string | null;
+};
+
+export async function sendScheduleEmail(
+  studentName: string,
+  studentEmail: string,
+  participantId: string,
+  scheduleItems: ScheduleEmailItem[],
+  manualResend = false,
+) {
+  const { data, error } = await supabase.functions.invoke("send-registration-email", {
+    body: {
+      studentName,
+      studentEmail,
+      participantId,
+      scheduleEmail: true,
+      scheduleItems,
+      manualResend,
+      // The delivery log has required card fields; schedule emails do not use
+      // a stored card or attachment.
+      cardBucket: "entry-passes",
+      cardPath: `schedule:${participantId}`,
+    },
+  });
+  if (error) {
+    let detail = error.message;
+    const context = (error as { context?: Response }).context;
+    if (context && typeof context.text === "function") {
+      try {
+        const bodyText = await context.text();
+        const parsed = JSON.parse(bodyText);
+        detail = parsed.error || parsed.message || bodyText;
+      } catch { /* Use the original Supabase error. */ }
+    }
+    throw new Error(detail);
+  }
+  return data;
+}

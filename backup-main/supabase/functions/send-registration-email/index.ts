@@ -39,9 +39,13 @@ Deno.serve(async (req) => {
       cardBucket = "entry-passes",
       cardPath = `${participantId}.png`,
       manualResend = false,
+      scheduleEmail = false,
+      scheduleItems = [],
     } = await req.json();
-    const deliveryType = manualResend
-      ? "manual_resend"
+    const deliveryType = scheduleEmail
+      ? (manualResend ? "schedule_resend" : "schedule")
+      : manualResend
+        ? "manual_resend"
       : pending
         ? "pending_teammate"
         : teammateComplete
@@ -84,15 +88,23 @@ Deno.serve(async (req) => {
       ? `<p><strong>Your teammate completed your registration for both your Technical and Non-Technical events.</strong> You do not need to register again.</p>`
       : "";
 
-    // Download PNG from Supabase Storage
-    const imageResponse = await fetch(imageUrl);
+    const scheduleRows = Array.isArray(scheduleItems)
+      ? scheduleItems.map((item) => `
+        <div style="margin:14px 0;padding:16px;border:1px solid ${item.slotNumber === 1 ? "#22d3ee" : "#f472b6"};border-radius:10px;background:#151126">
+          <div style="font-size:12px;font-weight:bold;letter-spacing:1px;color:${item.slotNumber === 1 ? "#67e8f9" : "#f9a8d4"}">SLOT ${item.slotNumber}</div>
+          <div style="font-size:20px;font-weight:bold;color:#ffffff;margin:5px 0">${item.eventName}</div>
+          <div style="color:#e2e8f0">${item.startTime} – ${item.endTime}</div>
+          <div style="color:#cbd5e1;margin-top:4px">Venue: ${item.room}</div>
+          ${item.teammate ? `<div style="color:#cbd5e1;margin-top:4px">Team: ${item.teammate}</div>` : ""}
+        </div>`).join("")
+      : "";
 
-    if (!imageResponse.ok) {
-      throw new Error("Unable to download entry card.");
+    let base64Image: string | null = null;
+    if (!scheduleEmail) {
+      const imageResponse = await fetch(imageUrl);
+      if (!imageResponse.ok) throw new Error("Unable to download entry card.");
+      base64Image = arrayBufferToBase64(await imageResponse.arrayBuffer());
     }
-
-    const imageBuffer = await imageResponse.arrayBuffer();
-    const base64Image = arrayBufferToBase64(imageBuffer);
 
     // Brevo API
     const brevoResponse = await fetch("https://api.brevo.com/v3/smtp/email", {
@@ -115,13 +127,26 @@ Deno.serve(async (req) => {
           },
         ],
 
-        subject: pending
+        subject: scheduleEmail
+          ? "TECHNOVANZA 2026 - Your Event Schedule"
+          : pending
           ? "TECHNOVANZA 2026 - Complete Your Registration"
           : teammateComplete
             ? "TECHNOVANZA 2026 - Registration Completed by Your Teammate"
           : "TECHNOVANZA 2026 - Registration Confirmed",
 
-        htmlContent: `
+        htmlContent: scheduleEmail ? `
+        <div style="font-family:Arial,sans-serif;padding:30px;background:#08080d;color:white;max-width:620px;margin:auto">
+          <div style="text-align:center;border-bottom:1px solid #ef4444;padding-bottom:18px">
+            <div style="font-size:24px;font-weight:bold;letter-spacing:1px;color:#ef4444">TECHNOVANZA 2026</div>
+            <div style="font-size:13px;letter-spacing:2px;color:#cbd5e1;margin-top:6px">PERSONAL EVENT SCHEDULE</div>
+          </div>
+          <p style="font-size:16px;margin-top:24px">Hello <strong>${studentName}</strong>,</p>
+          <p style="color:#cbd5e1">Your final conflict-free event timetable is below.</p>
+          ${scheduleRows}
+          <p style="color:#fde68a;margin-top:22px">Please report 15 minutes before each slot and bring your college ID and entry card.</p>
+          <p style="color:#94a3b8;font-size:13px">TECHNOVANZA 2026 • AAMEC CSE</p>
+        </div>` : `
         <div style="font-family:Arial,sans-serif;padding:30px;background:#0f172a;color:white">
             <h2 style="color:#67e8f9">
                 Registration Successful 🎉
@@ -162,10 +187,10 @@ Deno.serve(async (req) => {
         </div>
         `,
 
-        attachment: [
+        attachment: scheduleEmail ? [] : [
           {
             name: `${participantId}.png`,
-            content: base64Image,
+            content: base64Image!,
           },
         ],
       }),

@@ -1,7 +1,9 @@
 export type SchedulerRegistration = {
   id: string;
+  participant_id?: string;
   register_no: string;
   full_name: string;
+  email?: string;
   status: string;
   events: string[];
   partner_register_no?: string | null;
