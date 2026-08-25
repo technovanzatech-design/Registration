@@ -63,10 +63,12 @@ function SchedulePage() {
     const event = events.data?.find((item) => item.slug === row.event_slug);
     if (event?.team_size !== 2) return null;
     const registration = registrationByNumber.get(row.register_no);
-    const teammateNumber = registration?.event_partners?.[row.event_slug]?.registerNumber ?? registration?.partner_register_no;
-    if (!teammateNumber) return null;
-    const teammate = registrationByNumber.get(teammateNumber);
-    return teammate ? `${teammate.full_name} (${teammate.register_no})` : `Register No. ${teammateNumber}`;
+    const savedTeammate = registration?.event_partners?.[row.event_slug];
+    const teammateNumber = savedTeammate?.registerNumber ?? registration?.partner_register_no;
+    const teammate = teammateNumber ? registrationByNumber.get(teammateNumber) : undefined;
+    const teammateName = teammate?.full_name ?? savedTeammate?.fullName ?? registration?.partner_full_name;
+    if (teammateName) return teammate?.register_no ? `${teammateName} (${teammate.register_no})` : teammateName;
+    return teammateNumber ? `Register No. ${teammateNumber}` : null;
   };
   const scheduleItemsFor = (registrationId: string): ScheduleEmailItem[] => (assignments.data ?? [])
     .filter((row) => row.registration_id === registrationId)

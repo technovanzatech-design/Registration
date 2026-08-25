@@ -7,7 +7,7 @@ export type SchedulerRegistration = {
   status: string;
   events: string[];
   partner_register_no?: string | null;
-  event_partners?: Record<string, { registerNumber?: string }> | null;
+  event_partners?: Record<string, { fullName?: string; registerNumber?: string }> | null;
 };
 
 export type SchedulerEvent = { slug: string; category: "technical" | "non-technical"; team_size: number };
