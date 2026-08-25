@@ -42,6 +42,10 @@ alter table public.event_schedule_slots enable row level security;
 alter table public.techtalks_team_approvals enable row level security;
 alter table public.event_schedule_assignments enable row level security;
 
+drop policy if exists "admins manage event schedule slots" on public.event_schedule_slots;
+drop policy if exists "admins manage techtalk approvals" on public.techtalks_team_approvals;
+drop policy if exists "admins manage schedule assignments" on public.event_schedule_assignments;
+
 create policy "admins manage event schedule slots" on public.event_schedule_slots for all to authenticated
 using (exists (select 1 from public.admin_profiles a where a.id = auth.uid()))
 with check (exists (select 1 from public.admin_profiles a where a.id = auth.uid()));
