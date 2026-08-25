@@ -1,0 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap");
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: #080606; color: #f8e9e9; font-family: "Plus Jakarta Sans", sans-serif; }
+button, input { font: inherit; }
+button { cursor: pointer; }
