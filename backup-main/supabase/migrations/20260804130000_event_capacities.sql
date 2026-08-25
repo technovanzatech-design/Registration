@@ -39,7 +39,11 @@ create policy "admins can manage events"
 
 -- Unnests registrations.events (jsonb array of slugs) and counts how
 -- many registrations reference each slug, joined against capacity.
-create or replace view public.event_capacity_status as
+-- The live project may already have a later version of this view with extra columns,
+-- so replace it fully before creating this early migration version.
+drop view if exists public.event_capacity_status;
+
+create view public.event_capacity_status as
 select
   e.slug as event_slug,
   e.name as event_name,
