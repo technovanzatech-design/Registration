@@ -34,3 +34,15 @@ export async function uploadEntryCard(
     path: fileName,
   };
 }
+
+export async function uploadSchedulePass(participantId: string, blob: Blob): Promise<{ imageUrl: string; bucket: "schedule-passes"; path: string }> {
+  const path = `${participantId}.png`;
+  const { error } = await supabase.storage.from("schedule-passes").upload(path, blob, {
+    contentType: "image/png",
+    cacheControl: "0",
+    upsert: true,
+  });
+  if (error) throw error;
+  const { data } = supabase.storage.from("schedule-passes").getPublicUrl(path);
+  return { imageUrl: `${data.publicUrl}?v=${Date.now()}`, bucket: "schedule-passes", path };
+}

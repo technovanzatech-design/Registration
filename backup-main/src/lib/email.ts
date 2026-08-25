@@ -65,6 +65,8 @@ export async function sendScheduleEmail(
   studentEmail: string,
   participantId: string,
   scheduleItems: ScheduleEmailItem[],
+  imageUrl: string,
+  cardPath: string,
   manualResend = false,
 ) {
   const { data, error } = await supabase.functions.invoke("send-registration-email", {
@@ -74,11 +76,10 @@ export async function sendScheduleEmail(
       participantId,
       scheduleEmail: true,
       scheduleItems,
+      imageUrl,
       manualResend,
-      // The delivery log has required card fields; schedule emails do not use
-      // a stored card or attachment.
-      cardBucket: "entry-passes",
-      cardPath: `schedule:${participantId}`,
+      cardBucket: "schedule-passes",
+      cardPath,
     },
   });
   if (error) {

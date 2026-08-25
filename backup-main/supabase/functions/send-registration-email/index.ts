@@ -99,12 +99,9 @@ Deno.serve(async (req) => {
         </div>`).join("")
       : "";
 
-    let base64Image: string | null = null;
-    if (!scheduleEmail) {
-      const imageResponse = await fetch(imageUrl);
-      if (!imageResponse.ok) throw new Error("Unable to download entry card.");
-      base64Image = arrayBufferToBase64(await imageResponse.arrayBuffer());
-    }
+    const imageResponse = await fetch(imageUrl);
+    if (!imageResponse.ok) throw new Error(scheduleEmail ? "Unable to download schedule pass." : "Unable to download entry card.");
+    const base64Image = arrayBufferToBase64(await imageResponse.arrayBuffer());
 
     // Brevo API
     const brevoResponse = await fetch("https://api.brevo.com/v3/smtp/email", {
@@ -187,7 +184,7 @@ Deno.serve(async (req) => {
         </div>
         `,
 
-        attachment: scheduleEmail ? [] : [
+        attachment: [
           {
             name: `${participantId}.png`,
             content: base64Image!,
