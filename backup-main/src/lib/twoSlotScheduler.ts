@@ -17,9 +17,6 @@ export type ScheduleAssignment = { registration_id: string; event_slug: string; 
 const partnerNo = (registration: SchedulerRegistration, event: string) =>
   registration.event_partners?.[event]?.registerNumber ?? registration.partner_register_no ?? null;
 
-// A registration should contain each event once. This defensive helper keeps
-// a legacy/manual duplicate in the JSON array from consuming a second seat
-// during timetable generation.
 const uniqueEvents = (registration: SchedulerRegistration) => [...new Set(registration.events)];
 
 const teamKey = (registration: SchedulerRegistration, event: string) => {
@@ -27,17 +24,17 @@ const teamKey = (registration: SchedulerRegistration, event: string) => {
   return partner ? [registration.register_no, partner].sort().join(":") : null;
 };
 
-class UnionFind {
-  private parent: number[];
-  constructor(size: number) { this.parent = Array.from({ length: size }, (_, i) => i); }
-  find(x: number): number { return this.parent[x] === x ? x : (this.parent[x] = this.find(this.parent[x])); }
-  union(a: number, b: number) { const aa = this.find(a); const bb = this.find(b); if (aa !== bb) this.parent[bb] = aa; }
-}
+type Unit = {
+  key: string;
+  event: string;
+  registrations: SchedulerRegistration[];
+  links: Set<string>;
+};
 
 /**
- * Allocates connected duo-team members together. Every component receives one
- * technical slot and the opposite non-technical slot, so no team member can
- * have an overlap. TechTalks members are included only after team approval.
+ * A duo is one unit for its selected event. Each person's own selected events
+ * must be in opposite slots. This avoids wrongly forcing unrelated teams into
+ * the same technical/non-technical orientation.
  */
 export function createTwoSlotSchedule(
   rawRegistrations: SchedulerRegistration[],
@@ -45,147 +42,117 @@ export function createTwoSlotSchedule(
   slots: SchedulerSlot[],
   approvedTechTalkTeams: Set<string>,
 ): { assignments: ScheduleAssignment[]; excludedTechTalkTeams: string[] } {
-  const registrations = rawRegistrations.filter((r) => r.status === "complete");
+  const registrations = rawRegistrations.filter((registration) => registration.status === "complete");
   const eventBySlug = new Map(events.map((event) => [event.slug, event]));
-  const byRegisterNo = new Map(registrations.map((r, index) => [r.register_no, index]));
-  const union = new UnionFind(registrations.length);
-
-  registrations.forEach((registration, index) => {
-    uniqueEvents(registration).forEach((eventSlug) => {
-      if (eventBySlug.get(eventSlug)?.team_size !== 2) return;
-      const teammateIndex = byRegisterNo.get(partnerNo(registration, eventSlug) ?? "");
-      if (teammateIndex != null) union.union(index, teammateIndex);
-    });
-  });
-
-  const components = new Map<number, SchedulerRegistration[]>();
-  registrations.forEach((registration, index) => {
-    const root = union.find(index);
-    components.set(root, [...(components.get(root) ?? []), registration]);
-  });
   const slotByEventAndNumber = new Map(slots.map((slot) => [`${slot.event_slug}:${slot.slot_number}`, slot]));
-  const used = new Map<string, number>();
-  const assignments: ScheduleAssignment[] = [];
+  const units = new Map<string, Unit>();
+  const registrationUnits = new Map<string, string[]>();
   const excludedTechTalkTeams = new Set<string>();
 
-  const canFit = (items: Array<{ event: string }>, number: 1 | 2) => {
-    const required = new Map<string, number>();
-    items.forEach(({ event }) => required.set(event, (required.get(event) ?? 0) + 1));
-    return [...required.entries()].every(([event, count]) => {
-      const slot = slotByEventAndNumber.get(`${event}:${number}`);
-      return Boolean(slot && (slot.participant_capacity == null || (used.get(slot.id) ?? 0) + count <= slot.participant_capacity));
-    });
-  };
-  const add = (registration: SchedulerRegistration, event: string, number: 1 | 2) => {
-    const slot = slotByEventAndNumber.get(`${event}:${number}`);
-    if (!slot) throw new Error(`No Slot ${number} is configured for ${event}.`);
-    used.set(slot.id, (used.get(slot.id) ?? 0) + 1);
-    assignments.push({ registration_id: registration.id, event_slug: event, slot_id: slot.id });
-  };
-
-  // Schedule constrained groups first. A group that has a technical event
-  // has only one possible non-technical slot (the opposite one), while a
-  // participant without a technical event can use either slot. This prevents
-  // flexible participants from consuming a seat needed by a constrained team.
-  const groups = [...components.values()].sort((a, b) => {
-    const technicalCount = (group: SchedulerRegistration[]) => group.reduce(
-      (count, registration) => count + registration.events.filter((event) => eventBySlug.get(event)?.category === "technical").length,
-      0,
-    );
-    return technicalCount(b) - technicalCount(a) || b.length - a.length;
+  const selectedEvents = (registration: SchedulerRegistration) => uniqueEvents(registration).filter((event) => {
+    if (event !== "techtalks") return true;
+    const key = teamKey(registration, event);
+    if (!key || approvedTechTalkTeams.has(key)) return true;
+    excludedTechTalkTeams.add(key);
+    return false;
   });
 
-  type PlannedItem = {
-    component: SchedulerRegistration[];
-    technical: Array<{ registration: SchedulerRegistration; event: string }>;
-    nonTechnical: Array<{ registration: SchedulerRegistration; event: string }>;
-    candidates: Array<{ technicalSlot: 1 | 2 | null; nonTechnicalSlot: 1 | 2 | null }>;
-  };
-
-  const items: PlannedItem[] = groups.map((component) => {
-    const technical = component.flatMap((registration) => uniqueEvents(registration)
-      .filter((event) => eventBySlug.get(event)?.category === "technical")
-      .flatMap((event) => {
-        if (event !== "techtalks") return [{ registration, event }];
-        const key = teamKey(registration, event);
-        if (key && approvedTechTalkTeams.has(key)) return [{ registration, event }];
-        if (key) excludedTechTalkTeams.add(key);
-        return [];
-      }));
-    const nonTechnical = component.flatMap((registration) => uniqueEvents(registration)
-      .filter((event) => eventBySlug.get(event)?.category === "non-technical")
-      .map((event) => ({ registration, event })));
-
-    return {
-      component,
-      technical,
-      nonTechnical,
-      // Each option is a complete, non-overlapping two-event timetable for
-      // this connected group.
-      candidates: technical.length
-      ? [{ technicalSlot: 1, nonTechnicalSlot: nonTechnical.length ? 2 : null }, { technicalSlot: 2, nonTechnicalSlot: nonTechnical.length ? 1 : null }]
-      : nonTechnical.length
-        ? [{ technicalSlot: null, nonTechnicalSlot: 1 }, { technicalSlot: null, nonTechnicalSlot: 2 }]
-        : [{ technicalSlot: null, nonTechnicalSlot: null }],
-    };
+  registrations.forEach((registration) => {
+    selectedEvents(registration).forEach((event) => {
+      const definition = eventBySlug.get(event);
+      if (!definition) return;
+      const partner = definition.team_size === 2 ? partnerNo(registration, event) : null;
+      const key = partner ? `${event}:${[registration.register_no, partner].sort().join(":")}` : `${event}:${registration.register_no}`;
+      const unit = units.get(key) ?? { key, event, registrations: [], links: new Set<string>() };
+      if (!unit.registrations.some((member) => member.id === registration.id)) unit.registrations.push(registration);
+      units.set(key, unit);
+      registrationUnits.set(registration.id, [...(registrationUnits.get(registration.id) ?? []), key]);
+    });
   });
 
-  const reserve = (entries: Array<{ event: string }>, number: 1 | 2 | null, direction: 1 | -1) => {
-    if (!number) return;
-    entries.forEach(({ event }) => {
-      const slot = slotByEventAndNumber.get(`${event}:${number}`);
-      if (!slot) throw new Error(`No Slot ${number} is configured for ${event}.`);
-      used.set(slot.id, (used.get(slot.id) ?? 0) + direction);
-    });
-  };
-  const candidateFits = (item: PlannedItem, candidate: PlannedItem["candidates"][number]) =>
-    (!candidate.technicalSlot || canFit(item.technical.map((entry) => ({ event: entry.event })), candidate.technicalSlot)) &&
-    (!candidate.nonTechnicalSlot || canFit(item.nonTechnical.map((entry) => ({ event: entry.event })), candidate.nonTechnicalSlot));
-  const candidateLoad = (item: PlannedItem, candidate: PlannedItem["candidates"][number]) => {
-    const load = (entries: Array<{ event: string }>, number: 1 | 2 | null) => !number ? 0 : entries.reduce((total, { event }) => {
-      const slot = slotByEventAndNumber.get(`${event}:${number}`);
-      return total + (slot?.participant_capacity ? ((used.get(slot.id) ?? 0) + 1) / slot.participant_capacity : 0);
-    }, 0);
-    return load(item.technical, candidate.technicalSlot) + load(item.nonTechnical, candidate.nonTechnicalSlot);
-  };
+  registrationUnits.forEach((keys) => {
+    const distinct = [...new Set(keys)];
+    for (let index = 0; index < distinct.length; index += 1) {
+      for (let other = index + 1; other < distinct.length; other += 1) {
+        units.get(distinct[index])?.links.add(distinct[other]);
+        units.get(distinct[other])?.links.add(distinct[index]);
+      }
+    }
+  });
 
-  // Greedy assignment can fill one Nexus slot and only later discover that a
-  // valid team needs that exact slot. Search both valid orientations and undo
-  // earlier choices when needed. This is small (two possible slots per group)
-  // but guarantees we do not reject a valid 30-participant event merely due to
-  // registration order.
-  const choices = new Map<number, PlannedItem["candidates"][number]>();
+  const visited = new Set<string>();
+  const components: Array<{ units: Unit[]; colour: Map<string, 0 | 1> }> = [];
+  for (const firstUnit of units.values()) {
+    if (visited.has(firstUnit.key)) continue;
+    const colour = new Map<string, 0 | 1>([[firstUnit.key, 0]]);
+    const queue = [firstUnit.key];
+    const component: Unit[] = [];
+    while (queue.length) {
+      const key = queue.shift()!;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      const unit = units.get(key)!;
+      component.push(unit);
+      const currentColour = colour.get(key)!;
+      for (const neighbour of unit.links) {
+        const expected = currentColour === 0 ? 1 : 0;
+        const known = colour.get(neighbour);
+        if (known == null) {
+          colour.set(neighbour, expected);
+          queue.push(neighbour);
+        } else if (known !== expected) {
+          throw new Error(`The registrations for ${unit.registrations.map((registration) => registration.full_name).join(", ")} contain overlapping event choices that cannot fit into two slots.`);
+        }
+      }
+    }
+    components.push({ units: component, colour });
+  }
+
+  components.sort((a, b) => b.units.length - a.units.length);
+  const used = new Map<string, number>();
+  const orientations = new Map<number, 0 | 1>();
   let checkedBranches = 0;
+  const canPlace = (component: (typeof components)[number], orientation: 0 | 1) => component.units.every((unit) => {
+    const slotNumber = ((component.colour.get(unit.key)! + orientation) % 2 === 0 ? 1 : 2) as 1 | 2;
+    const slot = slotByEventAndNumber.get(`${unit.event}:${slotNumber}`);
+    return Boolean(slot && (slot.participant_capacity == null || (used.get(slot.id) ?? 0) + unit.registrations.length <= slot.participant_capacity));
+  });
+  const reserve = (component: (typeof components)[number], orientation: 0 | 1, direction: 1 | -1) => component.units.forEach((unit) => {
+    const slotNumber = ((component.colour.get(unit.key)! + orientation) % 2 === 0 ? 1 : 2) as 1 | 2;
+    const slot = slotByEventAndNumber.get(`${unit.event}:${slotNumber}`);
+    if (!slot) throw new Error(`No Slot ${slotNumber} is configured for ${unit.event}.`);
+    used.set(slot.id, (used.get(slot.id) ?? 0) + direction * unit.registrations.length);
+  });
   const place = (index: number): boolean => {
-    if (index === items.length) return true;
+    if (index === components.length) return true;
     if (++checkedBranches > 250000) return false;
-    const item = items[index];
-    const validCandidates = item.candidates
-      .filter((candidate) => candidateFits(item, candidate))
-      .sort((a, b) => candidateLoad(item, a) - candidateLoad(item, b));
-    for (const candidate of validCandidates) {
-      reserve(item.technical, candidate.technicalSlot, 1);
-      reserve(item.nonTechnical, candidate.nonTechnicalSlot, 1);
-      choices.set(index, candidate);
+    for (const orientation of [0, 1] as const) {
+      if (!canPlace(components[index], orientation)) continue;
+      reserve(components[index], orientation, 1);
+      orientations.set(index, orientation);
       if (place(index + 1)) return true;
-      choices.delete(index);
-      reserve(item.nonTechnical, candidate.nonTechnicalSlot, -1);
-      reserve(item.technical, candidate.technicalSlot, -1);
+      orientations.delete(index);
+      reserve(components[index], orientation, -1);
     }
     return false;
   };
 
   if (!place(0)) {
-    const firstUnplaced = items[choices.size] ?? items[items.length - 1];
-    const eventNames = [...new Set(firstUnplaced.nonTechnical.map((item) => item.event))].join(", ");
-    throw new Error(`No conflict-free two-slot timetable is available for ${firstUnplaced.component.map((r) => r.full_name).join(", ")}. ${eventNames ? `The selected event (${eventNames}) needs more usable slot space.` : ""}`);
+    const firstUnplaced = components[orientations.size] ?? components[components.length - 1];
+    const people = [...new Set(firstUnplaced.units.flatMap((unit) => unit.registrations.map((registration) => registration.full_name)))];
+    const eventNames = [...new Set(firstUnplaced.units.map((unit) => unit.event))].join(", ");
+    throw new Error(`No conflict-free two-slot timetable is available for ${people.join(", ")}. The selected event (${eventNames}) needs more usable slot space.`);
   }
 
-  items.forEach((item, index) => {
-    const choice = choices.get(index);
-    if (!choice) return;
-    if (choice.technicalSlot) item.technical.forEach(({ registration, event }) => add(registration, event, choice.technicalSlot!));
-    if (choice.nonTechnicalSlot) item.nonTechnical.forEach(({ registration, event }) => add(registration, event, choice.nonTechnicalSlot!));
+  const assignments: ScheduleAssignment[] = [];
+  components.forEach((component, index) => {
+    const orientation = orientations.get(index)!;
+    component.units.forEach((unit) => {
+      const slotNumber = ((component.colour.get(unit.key)! + orientation) % 2 === 0 ? 1 : 2) as 1 | 2;
+      const slot = slotByEventAndNumber.get(`${unit.event}:${slotNumber}`);
+      if (!slot) throw new Error(`No Slot ${slotNumber} is configured for ${unit.event}.`);
+      unit.registrations.forEach((registration) => assignments.push({ registration_id: registration.id, event_slug: unit.event, slot_id: slot.id }));
+    });
   });
   return { assignments, excludedTechTalkTeams: [...excludedTechTalkTeams] };
 }
